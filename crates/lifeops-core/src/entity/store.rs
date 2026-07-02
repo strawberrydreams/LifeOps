@@ -108,6 +108,43 @@ impl EntityStore {
             .await?;
         Ok(row.map(row_to_entity))
     }
+
+    pub async fn update(
+        &self,
+        schemas: &SchemaSet,
+        id: &str,
+        patch: Map<String, Value>,
+    ) -> Result<Entity, CoreError> {
+        let mut entity =
+            self.get(id).await?.ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+        let schema = schemas
+            .get(&entity.entity_type)
+            .ok_or_else(|| CoreError::UnknownType(entity.entity_type.clone()))?;
+
+        for (k, v) in patch {
+            if v.is_null() {
+                entity.data.remove(&k);
+            } else {
+                entity.data.insert(k, v);
+            }
+        }
+        validate_entity(schema, &entity.data)?;
+        let edges = collect_refs(schema, &entity.data);
+        entity.updated_at = now_rfc3339();
+
+        let mut tx = self.pool.begin().await?;
+        check_ref_targets(&mut tx, &edges).await?;
+        sqlx::query("UPDATE entities SET data = ?, updated_at = ? WHERE id = ?")
+            .bind(serde_json::Value::Object(entity.data.clone()).to_string())
+            .bind(&entity.updated_at)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM refs WHERE from_id = ?").bind(id).execute(&mut *tx).await?;
+        insert_refs(&mut tx, id, &edges).await?;
+        tx.commit().await?;
+        Ok(entity)
+    }
 }
 
 pub(crate) fn row_to_entity(row: sqlx::sqlite::SqliteRow) -> Entity {
@@ -267,5 +304,39 @@ mod tests {
     async fn 없는_id_조회는_none() {
         let store = EntityStore::open_in_memory().await.unwrap();
         assert!(store.get("ghost").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn 부분_수정과_null_제거() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let e = store
+            .create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠", "상태": "위시", "무브먼트": "쿼츠" })))
+            .await
+            .unwrap();
+        let updated = store
+            .update(&schemas, &e.id, obj(json!({ "상태": "주문됨", "무브먼트": null })))
+            .await
+            .unwrap();
+        assert_eq!(updated.data["상태"], "주문됨");
+        assert_eq!(updated.data["이름"], "세이코 미쿠"); // 언급 안 한 필드 유지
+        assert!(!updated.data.contains_key("무브먼트")); // null → 제거
+        assert!(updated.updated_at >= updated.created_at);
+    }
+
+    #[tokio::test]
+    async fn 수정_결과도_검증된다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let e = store
+            .create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠" })))
+            .await
+            .unwrap();
+        // 필수 필드를 null로 지우려는 시도 → 검증 실패
+        let err = store.update(&schemas, &e.id, obj(json!({ "이름": null }))).await.unwrap_err();
+        assert!(matches!(err, CoreError::Validation(_)));
+        // 없는 id → NotFound
+        let err = store.update(&schemas, "ghost", obj(json!({}))).await.unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
     }
 }
