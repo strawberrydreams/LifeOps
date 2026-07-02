@@ -145,6 +145,41 @@ impl EntityStore {
         tx.commit().await?;
         Ok(entity)
     }
+
+    pub async fn backlinks(&self, id: &str) -> Result<Vec<RefEdge>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT r.from_id, e.type AS from_type, r.field_name
+             FROM refs r JOIN entities e ON e.id = r.from_id
+             WHERE r.to_id = ?
+             ORDER BY e.updated_at DESC",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| RefEdge {
+                from_id: row.get("from_id"),
+                from_type: row.get("from_type"),
+                field_name: row.get("field_name"),
+            })
+            .collect())
+    }
+
+    pub async fn delete(&self, id: &str) -> Result<(), CoreError> {
+        if self.get(id).await?.is_none() {
+            return Err(CoreError::NotFound(id.to_string()));
+        }
+        let referrers = self.backlinks(id).await?;
+        if !referrers.is_empty() {
+            return Err(CoreError::DeleteBlocked { referrers });
+        }
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM refs WHERE from_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM entities WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 pub(crate) fn row_to_entity(row: sqlx::sqlite::SqliteRow) -> Entity {
@@ -337,6 +372,57 @@ mod tests {
         assert!(matches!(err, CoreError::Validation(_)));
         // 없는 id → NotFound
         let err = store.update(&schemas, "ghost", obj(json!({}))).await.unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn 수정_시_refs가_재구축된다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let w1 = store.create(&schemas, "시계", obj(json!({ "이름": "시계1" }))).await.unwrap();
+        let w2 = store.create(&schemas, "시계", obj(json!({ "이름": "시계2" }))).await.unwrap();
+        let todo = store
+            .create(&schemas, "할일", obj(json!({ "내용": "비교", "관련물건": [w1.id.clone()] })))
+            .await
+            .unwrap();
+        store
+            .update(&schemas, &todo.id, obj(json!({ "관련물건": [w2.id.clone()] })))
+            .await
+            .unwrap();
+        let back1 = store.backlinks(&w1.id).await.unwrap();
+        let back2 = store.backlinks(&w2.id).await.unwrap();
+        assert!(back1.is_empty());
+        assert_eq!(back2.len(), 1);
+        assert_eq!(back2[0].from_id, todo.id);
+    }
+
+    #[tokio::test]
+    async fn 참조된_엔티티는_삭제가_차단된다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let watch = store.create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠" }))).await.unwrap();
+        let todo = store
+            .create(&schemas, "할일", obj(json!({ "내용": "개봉", "관련물건": [watch.id.clone()] })))
+            .await
+            .unwrap();
+
+        let err = store.delete(&watch.id).await.unwrap_err();
+        let CoreError::DeleteBlocked { referrers } = err else { panic!("DeleteBlocked여야 함") };
+        assert_eq!(referrers.len(), 1);
+        assert_eq!(referrers[0].from_id, todo.id);
+        assert_eq!(referrers[0].from_type, "할일");
+        assert_eq!(referrers[0].field_name, "관련물건");
+
+        // 참조하는 쪽을 먼저 지우면 삭제 가능해진다
+        store.delete(&todo.id).await.unwrap();
+        store.delete(&watch.id).await.unwrap();
+        assert!(store.get(&watch.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn 없는_엔티티_삭제는_notfound() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let err = store.delete("ghost").await.unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
     }
 }
