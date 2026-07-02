@@ -47,7 +47,9 @@ pub struct EntityStore {
 
 impl EntityStore {
     pub async fn open(path: &Path) -> Result<Self, CoreError> {
-        let opts = SqliteConnectOptions::new().filename(path).create_if_missing(true);
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         Self::init(pool).await
     }
@@ -87,25 +89,28 @@ impl EntityStore {
         };
 
         let mut tx = self.pool.begin().await?;
-        check_ref_targets(&mut tx, &edges).await?;
-        sqlx::query("INSERT INTO entities (id, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-            .bind(&entity.id)
-            .bind(&entity.entity_type)
-            .bind(serde_json::Value::Object(entity.data.clone()).to_string())
-            .bind(&entity.created_at)
-            .bind(&entity.updated_at)
-            .execute(&mut *tx)
-            .await?;
+        check_ref_targets(&mut tx, schemas, &edges).await?;
+        sqlx::query(
+            "INSERT INTO entities (id, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&entity.id)
+        .bind(&entity.entity_type)
+        .bind(serde_json::Value::Object(entity.data.clone()).to_string())
+        .bind(&entity.created_at)
+        .bind(&entity.updated_at)
+        .execute(&mut *tx)
+        .await?;
         insert_refs(&mut tx, &entity.id, &edges).await?;
         tx.commit().await?;
         Ok(entity)
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Entity>, CoreError> {
-        let row = sqlx::query("SELECT id, type, data, created_at, updated_at FROM entities WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT id, type, data, created_at, updated_at FROM entities WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.map(row_to_entity))
     }
 
@@ -115,8 +120,10 @@ impl EntityStore {
         id: &str,
         patch: Map<String, Value>,
     ) -> Result<Entity, CoreError> {
-        let mut entity =
-            self.get(id).await?.ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+        let mut entity = self
+            .get(id)
+            .await?
+            .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
         let schema = schemas
             .get(&entity.entity_type)
             .ok_or_else(|| CoreError::UnknownType(entity.entity_type.clone()))?;
@@ -133,14 +140,17 @@ impl EntityStore {
         entity.updated_at = now_rfc3339();
 
         let mut tx = self.pool.begin().await?;
-        check_ref_targets(&mut tx, &edges).await?;
+        check_ref_targets(&mut tx, schemas, &edges).await?;
         sqlx::query("UPDATE entities SET data = ?, updated_at = ? WHERE id = ?")
             .bind(serde_json::Value::Object(entity.data.clone()).to_string())
             .bind(&entity.updated_at)
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM refs WHERE from_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM refs WHERE from_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         insert_refs(&mut tx, id, &edges).await?;
         tx.commit().await?;
         Ok(entity)
@@ -167,16 +177,43 @@ impl EntityStore {
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), CoreError> {
-        if self.get(id).await?.is_none() {
+        let mut tx = self.pool.begin().await?;
+        let exists = sqlx::query("SELECT 1 FROM entities WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
+        if !exists {
             return Err(CoreError::NotFound(id.to_string()));
         }
-        let referrers = self.backlinks(id).await?;
+        let rows = sqlx::query(
+            "SELECT r.from_id, e.type AS from_type, r.field_name
+             FROM refs r JOIN entities e ON e.id = r.from_id
+             WHERE r.to_id = ?
+             ORDER BY e.updated_at DESC",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let referrers: Vec<_> = rows
+            .into_iter()
+            .map(|row| RefEdge {
+                from_id: row.get("from_id"),
+                from_type: row.get("from_type"),
+                field_name: row.get("field_name"),
+            })
+            .collect();
         if !referrers.is_empty() {
             return Err(CoreError::DeleteBlocked { referrers });
         }
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM refs WHERE from_id = ?").bind(id).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM entities WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM refs WHERE from_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM entities WHERE id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -216,21 +253,27 @@ pub(crate) fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// ref/list<ref> 필드에서 (필드명, 대상 id) 목록 추출
-pub(crate) fn collect_refs(schema: &ResolvedSchema, data: &Map<String, Value>) -> Vec<(String, String)> {
+/// ref/list<ref> 필드에서 (필드명, 대상 id, 선언 target 타입) 목록 추출
+pub(crate) fn collect_refs(
+    schema: &ResolvedSchema,
+    data: &Map<String, Value>,
+) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for (fname, fdef) in &schema.fields {
         if !fdef.kind.contains_ref() {
             continue;
         }
+        let Some(target) = &fdef.target else {
+            continue;
+        };
         match data.get(fname) {
             Some(Value::String(id)) if fdef.kind == FieldKind::Ref => {
-                out.push((fname.clone(), id.clone()));
+                out.push((fname.clone(), id.clone(), target.clone()));
             }
             Some(Value::Array(items)) => {
                 for item in items {
                     if let Value::String(id) = item {
-                        out.push((fname.clone(), id.clone()));
+                        out.push((fname.clone(), id.clone(), target.clone()));
                     }
                 }
             }
@@ -242,18 +285,27 @@ pub(crate) fn collect_refs(schema: &ResolvedSchema, data: &Map<String, Value>) -
 
 async fn check_ref_targets(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    edges: &[(String, String)],
+    schemas: &SchemaSet,
+    edges: &[(String, String, String)],
 ) -> Result<(), CoreError> {
-    for (field, to_id) in edges {
-        let exists = sqlx::query("SELECT 1 FROM entities WHERE id = ?")
+    for (field, to_id, target) in edges {
+        let row = sqlx::query("SELECT type FROM entities WHERE id = ?")
             .bind(to_id)
             .fetch_optional(&mut **tx)
-            .await?
-            .is_some();
-        if !exists {
+            .await?;
+        let Some(row) = row else {
             return Err(CoreError::Validation(ValidationError(vec![FieldError {
                 field: field.clone(),
                 message: format!("존재하지 않는 엔티티를 참조함: {to_id}"),
+            }])));
+        };
+        let actual: String = row.get("type");
+        if !schemas.family_of(target).iter().any(|t| t == &actual) {
+            return Err(CoreError::Validation(ValidationError(vec![FieldError {
+                field: field.clone(),
+                message: format!(
+                    "참조 대상 타입 불일치: '{to_id}'는 '{actual}' 타입인데 '{target}' 타입 또는 하위 타입이어야 함"
+                ),
             }])));
         }
     }
@@ -263,9 +315,9 @@ async fn check_ref_targets(
 async fn insert_refs(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     from_id: &str,
-    edges: &[(String, String)],
+    edges: &[(String, String, String)],
 ) -> Result<(), CoreError> {
-    for (field, to_id) in edges {
+    for (field, to_id, _target) in edges {
         sqlx::query("INSERT OR IGNORE INTO refs (from_id, to_id, field_name) VALUES (?, ?, ?)")
             .bind(from_id)
             .bind(to_id)
@@ -306,12 +358,23 @@ mod tests {
         v.as_object().unwrap().clone()
     }
 
+    fn assert_ref_type_mismatch_message(message: &str, referenced_id: &str) {
+        assert!(message.contains("타입"), "메시지: {message}");
+        assert!(message.contains(referenced_id), "메시지: {message}");
+        assert!(message.contains("할일"), "메시지: {message}");
+        assert!(message.contains("물건"), "메시지: {message}");
+    }
+
     #[tokio::test]
     async fn 생성하고_조회한다() {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
         let e = store
-            .create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠", "상태": "위시" })))
+            .create(
+                &schemas,
+                "시계",
+                obj(json!({ "이름": "세이코 미쿠", "상태": "위시" })),
+            )
             .await
             .unwrap();
         assert!(!e.id.is_empty());
@@ -325,9 +388,15 @@ mod tests {
     async fn 없는_타입과_검증_실패() {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
-        let err = store.create(&schemas, "유령", obj(json!({}))).await.unwrap_err();
+        let err = store
+            .create(&schemas, "유령", obj(json!({})))
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::UnknownType(_)));
-        let err = store.create(&schemas, "시계", obj(json!({ "상태": "위시" }))).await.unwrap_err();
+        let err = store
+            .create(&schemas, "시계", obj(json!({ "상태": "위시" })))
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::Validation(_)));
     }
 
@@ -336,10 +405,16 @@ mod tests {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
         let err = store
-            .create(&schemas, "할일", obj(json!({ "내용": "에코작", "관련물건": ["ghost-id"] })))
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "에코작", "관련물건": ["ghost-id"] })),
+            )
             .await
             .unwrap_err();
-        let CoreError::Validation(v) = err else { panic!("Validation이어야 함") };
+        let CoreError::Validation(v) = err else {
+            panic!("Validation이어야 함")
+        };
         assert!(v.0[0].message.contains("ghost-id"));
 
         let watch = store
@@ -347,10 +422,88 @@ mod tests {
             .await
             .unwrap();
         let todo = store
-            .create(&schemas, "할일", obj(json!({ "내용": "에코작", "관련물건": [watch.id] })))
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "에코작", "관련물건": [watch.id] })),
+            )
             .await
             .unwrap();
         assert!(!todo.id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ref_대상의_타입이_선언과_다르면_거부() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        // 할일.관련물건 target=물건 인데, 할일 id(물건 family 아님)를 넣으면 거부되어야 한다.
+        let todo1 = store
+            .create(&schemas, "할일", obj(json!({ "내용": "먼저" })))
+            .await
+            .unwrap();
+        let wrong_id = todo1.id.clone();
+        let err = store
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "잘못된참조", "관련물건": [wrong_id.clone()] })),
+            )
+            .await
+            .unwrap_err();
+        let CoreError::Validation(v) = err else {
+            panic!("Validation이어야 함")
+        };
+        assert_ref_type_mismatch_message(&v.0[0].message, &wrong_id);
+
+        // 물건 family(시계 포함)는 통과
+        let watch = store
+            .create(&schemas, "시계", obj(json!({ "이름": "시계1" })))
+            .await
+            .unwrap();
+        let ok = store
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "정상", "관련물건": [watch.id] })),
+            )
+            .await;
+        assert!(ok.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ref_대상의_타입이_선언과_다르면_수정도_거부() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let wrong_todo = store
+            .create(&schemas, "할일", obj(json!({ "내용": "잘못된 대상" })))
+            .await
+            .unwrap();
+        let wrong_id = wrong_todo.id.clone();
+        let watch = store
+            .create(&schemas, "시계", obj(json!({ "이름": "시계1" })))
+            .await
+            .unwrap();
+        let todo = store
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "수정 대상", "관련물건": [watch.id] })),
+            )
+            .await
+            .unwrap();
+
+        let err = store
+            .update(
+                &schemas,
+                &todo.id,
+                obj(json!({ "관련물건": [wrong_id.clone()] })),
+            )
+            .await
+            .unwrap_err();
+        let CoreError::Validation(v) = err else {
+            panic!("Validation이어야 함")
+        };
+        assert_ref_type_mismatch_message(&v.0[0].message, &wrong_id);
     }
 
     #[tokio::test]
@@ -364,11 +517,19 @@ mod tests {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
         let e = store
-            .create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠", "상태": "위시", "무브먼트": "쿼츠" })))
+            .create(
+                &schemas,
+                "시계",
+                obj(json!({ "이름": "세이코 미쿠", "상태": "위시", "무브먼트": "쿼츠" })),
+            )
             .await
             .unwrap();
         let updated = store
-            .update(&schemas, &e.id, obj(json!({ "상태": "주문됨", "무브먼트": null })))
+            .update(
+                &schemas,
+                &e.id,
+                obj(json!({ "상태": "주문됨", "무브먼트": null })),
+            )
             .await
             .unwrap();
         assert_eq!(updated.data["상태"], "주문됨");
@@ -386,10 +547,16 @@ mod tests {
             .await
             .unwrap();
         // 필수 필드를 null로 지우려는 시도 → 검증 실패
-        let err = store.update(&schemas, &e.id, obj(json!({ "이름": null }))).await.unwrap_err();
+        let err = store
+            .update(&schemas, &e.id, obj(json!({ "이름": null })))
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::Validation(_)));
         // 없는 id → NotFound
-        let err = store.update(&schemas, "ghost", obj(json!({}))).await.unwrap_err();
+        let err = store
+            .update(&schemas, "ghost", obj(json!({})))
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
     }
 
@@ -397,14 +564,28 @@ mod tests {
     async fn 수정_시_refs가_재구축된다() {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
-        let w1 = store.create(&schemas, "시계", obj(json!({ "이름": "시계1" }))).await.unwrap();
-        let w2 = store.create(&schemas, "시계", obj(json!({ "이름": "시계2" }))).await.unwrap();
+        let w1 = store
+            .create(&schemas, "시계", obj(json!({ "이름": "시계1" })))
+            .await
+            .unwrap();
+        let w2 = store
+            .create(&schemas, "시계", obj(json!({ "이름": "시계2" })))
+            .await
+            .unwrap();
         let todo = store
-            .create(&schemas, "할일", obj(json!({ "내용": "비교", "관련물건": [w1.id.clone()] })))
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "비교", "관련물건": [w1.id.clone()] })),
+            )
             .await
             .unwrap();
         store
-            .update(&schemas, &todo.id, obj(json!({ "관련물건": [w2.id.clone()] })))
+            .update(
+                &schemas,
+                &todo.id,
+                obj(json!({ "관련물건": [w2.id.clone()] })),
+            )
             .await
             .unwrap();
         let back1 = store.backlinks(&w1.id).await.unwrap();
@@ -418,14 +599,23 @@ mod tests {
     async fn 참조된_엔티티는_삭제가_차단된다() {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
-        let watch = store.create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠" }))).await.unwrap();
+        let watch = store
+            .create(&schemas, "시계", obj(json!({ "이름": "세이코 미쿠" })))
+            .await
+            .unwrap();
         let todo = store
-            .create(&schemas, "할일", obj(json!({ "내용": "개봉", "관련물건": [watch.id.clone()] })))
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "개봉", "관련물건": [watch.id.clone()] })),
+            )
             .await
             .unwrap();
 
         let err = store.delete(&watch.id).await.unwrap_err();
-        let CoreError::DeleteBlocked { referrers } = err else { panic!("DeleteBlocked여야 함") };
+        let CoreError::DeleteBlocked { referrers } = err else {
+            panic!("DeleteBlocked여야 함")
+        };
         assert_eq!(referrers.len(), 1);
         assert_eq!(referrers[0].from_id, todo.id);
         assert_eq!(referrers[0].from_type, "할일");
@@ -448,14 +638,26 @@ mod tests {
     async fn 타입_목록으로_조회한다() {
         let store = EntityStore::open_in_memory().await.unwrap();
         let schemas = test_schemas();
-        store.create(&schemas, "물건", obj(json!({ "이름": "잡화1" }))).await.unwrap();
-        store.create(&schemas, "시계", obj(json!({ "이름": "시계1" }))).await.unwrap();
-        store.create(&schemas, "할일", obj(json!({ "내용": "정리" }))).await.unwrap();
+        store
+            .create(&schemas, "물건", obj(json!({ "이름": "잡화1" })))
+            .await
+            .unwrap();
+        store
+            .create(&schemas, "시계", obj(json!({ "이름": "시계1" })))
+            .await
+            .unwrap();
+        store
+            .create(&schemas, "할일", obj(json!({ "내용": "정리" })))
+            .await
+            .unwrap();
 
         let family = schemas.family_of("물건"); // [물건, 시계]
         let items = store.list(&family).await.unwrap();
         assert_eq!(items.len(), 2);
-        let all = store.list(&["물건".into(), "시계".into(), "할일".into()]).await.unwrap();
+        let all = store
+            .list(&["물건".into(), "시계".into(), "할일".into()])
+            .await
+            .unwrap();
         assert_eq!(all.len(), 3);
         let none = store.list(&[]).await.unwrap();
         assert!(none.is_empty());
