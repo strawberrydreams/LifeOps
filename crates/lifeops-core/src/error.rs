@@ -1,4 +1,19 @@
+use crate::entity::validate::ValidationError;
 use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum CoreError {
+    #[error("알 수 없는 타입 '{0}'")]
+    UnknownType(String),
+    #[error(transparent)]
+    Validation(#[from] ValidationError),
+    #[error("엔티티를 찾을 수 없음: {0}")]
+    NotFound(String),
+    #[error("삭제 불가: {}곳에서 참조 중", referrers.len())]
+    DeleteBlocked { referrers: Vec<crate::entity::store::RefEdge> },
+    #[error("DB 오류: {0}")]
+    Db(#[from] sqlx::Error),
+}
 
 #[derive(Debug, Error)]
 pub enum SchemaError {
