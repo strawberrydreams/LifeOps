@@ -2,6 +2,13 @@
 
 ## 2026-07-02
 
+- Task 4 시작: `view::query` 집계는 먼저 `sum/count/min/max`와 잘못된 집계식 테스트를 추가했고, production 변경 전 `cargo test -p lifeops-core view::query::tests::집계`가 빈 `aggregates` 때문에 `합계` 키 조회에서 실패하는 red 상태를 확인했다.
+- 변경: `run_view`는 filter만 적용된 정렬 전 엔티티 목록을 기준으로 `block.aggregate`를 선언 순서대로 계산해 `ViewResult.aggregates`에 넣는다. 정렬은 `ViewResult.entities` 표시 순서에만 영향을 주고 aggregate 입력 순서는 바꾸지 않는다.
+- 결정: 집계식 파서는 `func(field)` 형태만 허용하고 함수명/필드명의 앞뒤 공백은 무시한다. 빈 함수/필드나 괄호가 남은 malformed 식은 `ViewError::BadAggregate`로 처리한다.
+- 결정: 지원 함수는 `count`, `sum`, `min`, `max` 소문자만이다. Task 4 계획 문구는 `count(field)`를 필드 존재 count로 설명했지만, 상위 설계 §3.3이 `count`를 매칭 행 수로 정의하므로 최종 구현은 filtered row count를 따른다. 다만 `count(field)` 형식의 field는 계속 파싱/검증해 없는 필드는 `UnknownField`로 반환한다.
+- 결정: `sum/min/max`는 기존 `extract_f64`를 재사용해 숫자와 money `{ amount }`만 대상으로 삼고, 숫자가 없는 값은 무시한다. money 필드는 numeric amount가 있는 행들의 non-empty currency가 둘 이상이면 `CurrencyMismatch`를 반환한다.
+- trade-off: 숫자 값이 하나도 없는 `min/max`는 `Value::Null`을 반환하고, `sum`은 빈 숫자 집합의 합인 `0.0`을 반환한다. 알 수 없는 집계 필드는 기존 `UnknownField` 변형을 사용하되 source는 resolve된 schema 이름으로 채운다.
+- 리뷰 수정: 집계 함수명이 `count/sum/min/max` 중 하나인지 먼저 검증한 뒤 필드 존재 여부를 검사한다. 따라서 `total(유령)`처럼 함수와 필드가 모두 잘못된 경우에도 spec대로 `BadAggregate`가 우선된다.
 - Task 3 시작: `view::query`는 요구된 TDD 순서대로 먼저 필터/정렬 테스트를 추가하고, `view::mod`에서 `query`와 `run_view`를 노출했다.
 - red 준비: production 구현 전 테스트 대상이 컴파일되도록 `run_view`는 임시로 `UnknownSource`만 반환하는 최소 stub으로 두었다. 이후 red 실패가 확인되면 실제 필터/정렬 로직으로 교체한다.
 - red 확인: `cargo test -p lifeops-core view::query`는 5개 중 unknown source 1개만 통과하고, 나머지는 `UnknownSource("물건")` 또는 없는 필드 메시지 불일치로 실패했다. 테스트가 새 동작을 실제로 요구함을 확인했다.
