@@ -40,3 +40,80 @@ pub enum SchemaError {
     #[error("타입 '{ty}': field_order에 존재하지 않는 필드 '{field}'")]
     UnknownFieldInOrder { ty: String, field: String },
 }
+
+#[derive(Debug)]
+pub enum ViewError {
+    UnknownSource(String),
+    UnknownField {
+        view: String,
+        source: String,
+        field: String,
+    },
+    BadAggregate {
+        view: String,
+        expr: String,
+    },
+    CurrencyMismatch {
+        view: String,
+        field: String,
+    },
+    Io(std::io::Error),
+    Parse {
+        file: String,
+        source: serde_yaml::Error,
+    },
+    Core(crate::error::CoreError),
+}
+
+impl std::fmt::Display for ViewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViewError::UnknownSource(source) => write!(f, "알 수 없는 source 타입 '{source}'"),
+            ViewError::UnknownField {
+                view,
+                source,
+                field,
+            } => write!(f, "뷰 '{view}': source '{source}'에 없는 필드 '{field}'"),
+            ViewError::BadAggregate { view, expr } => {
+                write!(f, "뷰 '{view}': 잘못된 집계식 '{expr}' (형식: 함수(필드))")
+            }
+            ViewError::CurrencyMismatch { view, field } => {
+                write!(
+                    f,
+                    "뷰 '{view}' 필드 '{field}': 통화가 섞여 합계를 낼 수 없음"
+                )
+            }
+            ViewError::Io(source) => write!(f, "페이지 디렉터리 로드 실패: {source}"),
+            ViewError::Parse { file, source } => {
+                write!(f, "{file}: 페이지 YAML 파싱 실패: {source}")
+            }
+            ViewError::Core(source) => source.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ViewError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ViewError::Io(source) => Some(source),
+            ViewError::Parse { source, .. } => Some(source),
+            ViewError::Core(source) => Some(source),
+            ViewError::UnknownSource(_)
+            | ViewError::UnknownField { .. }
+            | ViewError::BadAggregate { .. }
+            | ViewError::CurrencyMismatch { .. } => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ViewError {
+    fn from(source: std::io::Error) -> Self {
+        ViewError::Io(source)
+    }
+}
+
+impl From<crate::error::CoreError> for ViewError {
+    fn from(source: crate::error::CoreError) -> Self {
+        ViewError::Core(source)
+    }
+}

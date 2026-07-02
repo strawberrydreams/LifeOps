@@ -2,6 +2,12 @@
 
 ## 2026-07-02
 
+- Task 2 시작: `view::model` 데이터 모델은 먼저 요구된 YAML 파싱 테스트 3개를 추가하고, 테스트가 컴파일 대상에 포함되도록 최소 `view` 모듈만 연결한 뒤 red 상태를 확인하기로 했다.
+- red 확인: `cargo test -p lifeops-core view::model`은 `ViewBlock`, `Layout`, `PageDef` 미정의 컴파일 오류로 실패했다. 이는 새 테스트가 실제로 컴파일 대상에 들어왔음을 확인하는 실패다.
+- 변경: `view::model`에 `Filter`, `Layout`, `ViewBlock`, `PageDef`, `ViewResult`, `PageResult`를 추가하고 `view::mod`에서 재노출했다. `Layout`은 YAML/API 문자열을 소문자로 유지하고 기본값을 `Table`로 둔다.
+- 변경: `error.rs`에 이후 view 로딩/검증 단계에서 쓸 `ViewError`를 추가했다. 이번 Task 2에서는 타입 정의만 필요해 아직 호출 지점은 없다.
+- trade-off: 요구된 `ViewError::UnknownField { source: String, ... }` 필드명을 유지하기 위해 `ViewError`만 `thiserror::Error` derive 대신 수동 `Display`/`Error`/`From` 구현을 사용했다. `thiserror` 2.x는 이름이 `source`인 필드를 자동으로 `Error::source()`로 취급해 `String` 필드와 함께 컴파일되지 않는다.
+- trade-off: `ViewBlock`의 `filter`, `sort`, `columns`, `aggregate`는 누락 YAML을 허용하기 위해 모두 `Option`과 `#[serde(default)]`를 사용했다. 빈 맵/빈 벡터로 정규화하지 않고 원본 정의의 생략 여부를 보존한다.
 - `docs/superpowers/plans/2026-07-02-lifeops-view-api.md`의 Task 6 `AppState`를 최종 형태로 통일했다.
 - 결정: `AppState`는 처음 생성될 때부터 `schemas_dir`와 `views_dir`를 보관한다. `/api/reload`가 Task 8에서 추가되지만, 이 경로는 서버 상태의 기본 불변 컨텍스트이므로 Task 8에서 타입 시그니처를 다시 바꾸지 않는다.
 - 변경: Task 6의 `test_state()`는 처음부터 `(AppState, tempfile::TempDir)`를 반환하고, Task 6/7 테스트는 `let (state, _dir) = test_state().await;` 형태로 tempdir 수명을 유지한다.
