@@ -1,5 +1,47 @@
+# OS
+.DS_Store
+
+# Rust build
 /target
+
+# frontend deps / build (Svelte + Vite, 계획 3)
+node_modules
+dist
+coverage
+*.tsbuildinfo
+npm-debug.log*
+
+# runtime data / backups (SQLite db는 /data 아래 런타임 생성)
 /data/*.db
 /data/*.db-*
-.DS_Store
+backups/
+
+# tooling / worktrees / agent·planning workspace
+.worktrees
+.playwright-mcp
+.claude
+.superpowers/
+
+# env files
+.env
+.env.*
+!.env.example
+
+# editor / IDE
+.vscode
+.idea
+
+# 로컬 전용 — GitHub에 올리지 않음
 /life-archive/
+/docs/
+CLAUDE.md
+implementation.md
+
+# 루트의 스크래치 스크린샷/이미지
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.mp4
+/*.webm
