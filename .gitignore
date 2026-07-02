@@ -2,3 +2,4 @@
 /data/*.db
 /data/*.db-*
 .DS_Store
+/life-archive/
