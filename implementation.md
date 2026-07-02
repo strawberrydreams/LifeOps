@@ -2,6 +2,14 @@
 
 ## 2026-07-02
 
+- Task 6 시작: `lifeops-server` workspace member와 서버 크레이트 manifest를 추가하고, TDD red 확인을 위해 먼저 `GET /api/health` 테스트와 `test_state()` helper만 배치했다. production `AppState`/`build_app`/`ApiError` 구현은 red 실패 확인 뒤 추가한다.
+- red 확인: 최초 `cargo test -p lifeops-server`는 sandbox 네트워크에서 crates.io host resolve 실패로 멈췄고, 승인된 네트워크 재시도 후 `AppState`와 `build_app` 미정의 컴파일 오류로 실패했다. 테스트가 새 서버 API 구현을 실제로 요구함을 확인했다.
+- 변경: `AppState`는 `SchemaSet`/`PageSet`을 `Arc<RwLock<_>>`로, `EntityStore`를 `Arc<_>`로 보관하고, 이후 reload 경로에 필요한 `schemas_dir`/`views_dir`를 함께 가진다.
+- 변경: `build_app(state)`는 현재 Task 6 범위에 맞춰 `GET /api/health`만 등록하고 `"ok"`를 반환한다. 공개 route는 Task 7 이후로 남겨두었다.
+- 변경: `ApiError`는 `{ "error": { ... } }` envelope를 유지하며 `CoreError`와 `ViewError`를 HTTP status + JSON body로 변환한다. DB 오류는 상세를 로그에만 남기고 응답은 일반 내부 오류 메시지로 축약한다.
+- 결정: Task 5에서 추가된 `ViewError::DuplicatePage { .. }`는 view 정의 오류이므로 `UnknownSource`/`UnknownField`/`BadAggregate`/`CurrencyMismatch`와 같은 BAD_REQUEST `view` code로 매핑했다.
+- green 확인: core 파일에 생긴 불필요한 workspace rustfmt 변경을 되돌린 뒤 `cargo test -p lifeops-server && cargo build -p lifeops-server`, `cargo clippy -p lifeops-server -- -D warnings`를 다시 실행해 모두 통과했다.
+- 리뷰 후 cleanup: 서버 crate module visibility를 plan과 맞게 private `mod`로 좁혔고, health 테스트가 status뿐 아니라 응답 body `"ok"` 계약도 검증하도록 보강했다. private module 전환으로 Task 7+용 API가 현재 bin target에서 미사용 경고를 내므로 `AppState`/`ApiError`에만 좁게 `dead_code` allow를 붙였다.
 - Task 5 시작: `view::page`는 요구된 TDD 순서대로 먼저 페이지 디렉터리 로드/실행, broken YAML 파일명 포함 오류, missing directory 빈 `PageSet` 테스트를 추가했다. production 구현 전 `view::mod`에 `page` 모듈과 공개 재수출만 연결했다.
 - red 확인: `cargo test -p lifeops-core view::page`는 `page::run_page`, `page::PageSet` 미정의 컴파일 오류로 실패했다. 새 테스트와 공개 API가 실제 구현을 요구함을 확인했다.
 - 변경: `PageSet::load_dir`는 존재하지 않는 디렉터리를 빈 세트로 처리하고, `.yaml`/`.yml` 파일만 파일명 순서로 읽어 `PageDef.page` 이름을 키로 `IndexMap`에 보관한다.
