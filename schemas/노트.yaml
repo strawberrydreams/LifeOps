@@ -1,0 +1,5 @@
+type: 노트
+fields:
+  제목: { kind: text, required: true }
+  본문: { kind: richtext }
+  태그: { kind: "list<text>" }

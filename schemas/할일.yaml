@@ -1,0 +1,6 @@
+type: 할일
+fields:
+  내용:     { kind: text, required: true }
+  완료:     { kind: bool }
+  마감일:   { kind: date }
+  관련물건: { kind: "list<ref>", target: 물건 }

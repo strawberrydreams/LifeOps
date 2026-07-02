@@ -1,1 +1,3 @@
-// 모듈은 이후 태스크에서 추가된다.
+pub mod error;
+pub mod schema;
+pub mod entity;

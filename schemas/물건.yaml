@@ -1,0 +1,10 @@
+type: 물건
+fields:
+  이름:       { kind: text, required: true }
+  카테고리:   { kind: enum, options: [시계, 보석, 잡화, 수집품, 화장품, 인테리어, 여행·레저, 패션·의류, 공구·장비, 식품·주류, 전자제품, 기타] }
+  상태:       { kind: enum, options: [위시, 주문됨, 보유, 과거], required: true }
+  가격:       { kind: money }
+  구매일:     { kind: date }
+  배송예정일: { kind: date }
+  구매링크:   { kind: url }
+  메모:       { kind: text }

@@ -1,0 +1,6 @@
+type: 시계
+extends: 물건
+fields:
+  무브먼트: { kind: text }
+  콜라보:   { kind: text }
+field_order: [이름, 콜라보, 무브먼트, 가격, 상태, 구매일, 배송예정일, 구매링크, 카테고리, 메모]
