@@ -66,14 +66,15 @@ describe("Widget 매핑", () => {
     expect(onchange).toHaveBeenCalledWith("2026-07-04");
   });
 
-  it("list<text> → Task 2 fallback, 스칼라 text widget 아님", () => {
-    const { container } = render(Widget, {
+  it("list<text> → 반복 위젯으로 base text 항목과 추가 버튼 렌더", () => {
+    const { container, getByText } = render(Widget, {
       field: f("list<text>"),
       value: ["세이코"],
       onchange: vi.fn(),
     });
-    expect(container.querySelector('input[type="text"]')).toBeNull();
-    expect(container.querySelector("input")).not.toBeNull();
+    expect(container.querySelector(".list")).not.toBeNull();
+    expect(container.querySelector('input[type="text"]')).not.toBeNull();
+    expect(getByText("+ 추가")).toBeInTheDocument();
   });
 
   it("parseKind는 list kind를 base와 list flag로 분리", () => {
