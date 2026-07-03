@@ -11,18 +11,31 @@
     ondeleted?: () => void;
   } = $props();
 
-  let data = $state<Record<string, unknown>>({ ...entity.data });
+  let data = $state<Record<string, unknown>>({});
   let blockers = $state<RefEdge[]>([]);
   let msg = $state<string | null>(null);
+
+  $effect(() => {
+    data = { ...entity.data };
+  });
 
   function set(name: string, v: unknown) {
     if (v === null || v === undefined || v === "") delete data[name];
     else data[name] = v;
   }
   async function save() {
-    const updated = await updateEntity(entity.id, { ...data });
-    msg = "저장됨";
-    onsaved?.(updated);
+    try {
+      const updated = await updateEntity(entity.id, { ...data });
+      msg = "저장됨";
+      onsaved?.(updated);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const fieldMsgs = err.fields?.map((f) => `${f.field}: ${f.message}`).join(", ");
+        msg = fieldMsgs ? `${err.message} (${fieldMsgs})` : err.message;
+      } else {
+        msg = "저장 실패";
+      }
+    }
   }
   async function remove() {
     blockers = [];
@@ -43,8 +56,7 @@
   <h2>{entity.type}</h2>
   {#each Object.entries(schema.fields) as [name, field]}
     <div class="field">
-      <label>{name}</label>
-      <Widget field={field} value={data[name]} onchange={(v) => set(name, v)} />
+      <label>{name}<Widget field={field} value={data[name]} onchange={(v) => set(name, v)} /></label>
     </div>
   {/each}
   <button type="button" onclick={save}>저장</button>

@@ -26,4 +26,13 @@ describe("DetailView", () => {
     await fireEvent.click(getByText("삭제"));
     expect(await findByText(/참조 중/)).toBeInTheDocument();
   });
+
+  it("저장_실패시_에러메시지_표시", async () => {
+    vi.spyOn(api, "updateEntity").mockRejectedValue(
+      new ApiError(400, "validation", "검증 실패", { fields: [{ field: "이름", message: "필수 필드" }] })
+    );
+    const { getByText, findByText } = render(DetailView, { schema, entity, backlinks: [] });
+    await fireEvent.click(getByText("저장"));
+    expect(await findByText(/검증 실패|필수/)).toBeInTheDocument();
+  });
 });

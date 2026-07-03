@@ -20,6 +20,16 @@
             <li><input type="checkbox" checked={e.data["완료"] === true} disabled /> {String(e.data["내용"] ?? e.data["이름"] ?? e.id)}</li>
           {/each}
         </ul>
+      {:else if block.layout === "card"}
+        <div class="cards">
+          {#each block.entities as e}
+            <div class="card">
+              {#each block.columns ?? Object.keys(e.data) as c}
+                <div class="card-field">{c}: {String(e.data[c] ?? "")}</div>
+              {/each}
+            </div>
+          {/each}
+        </div>
       {:else}
         <table>
           <thead><tr>{#each block.columns ?? [] as c}<th>{c}</th>{/each}</tr></thead>
