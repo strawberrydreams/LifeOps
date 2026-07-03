@@ -4,6 +4,7 @@
   import MoneyWidget from "./MoneyWidget.svelte";
   import ListWidget from "./ListWidget.svelte";
   import RefPicker from "./RefPicker.svelte";
+  import NoteEditor from "./NoteEditor.svelte";
 
   let {
     field,
@@ -25,6 +26,8 @@
   <MoneyWidget value={value as { amount: number; currency: string } | null} {onchange} />
 {:else if kind === "ref"}
   <RefPicker field={field} value={value as string | null} onchange={onchange} />
+{:else if kind === "richtext"}
+  <NoteEditor value={value as string | null} onchange={onchange} />
 {:else if kind === "text" || kind === "image" || kind === "url"}
   <input
     type={kind === "url" ? "url" : "text"}
@@ -66,7 +69,7 @@
     {/each}
   </select>
 {:else}
-  <!-- richtext 는 Task 5에서 분기 추가; 그전까지 폴백 input -->
+  <!-- Unknown kinds use a conservative text fallback. -->
   <input
     value={value === null || value === undefined ? "" : String(value)}
     oninput={(e) => onchange((e.currentTarget as HTMLInputElement).value)}
