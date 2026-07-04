@@ -147,3 +147,13 @@
 - 변경: `delete()`의 존재 확인과 backlink 조회를 삭제 트랜잭션 내부로 이동해 검사와 삭제 사이의 TOCTOU 창을 줄였다. 공개 `backlinks()` 메서드는 기존 조회 API로 그대로 둔다.
 - trade-off: `delete()` 내부에 backlink 조회 SQL을 한 번 더 두어 중복이 생겼지만, 공개 `backlinks()`가 풀 기반 조회를 유지해야 하므로 트랜잭션 내부 검사용 헬퍼를 새로 공개하지 않는 쪽을 택했다.
 - 리뷰 보강: ref 대상 타입 불일치 회귀 테스트가 `create()`와 `update()` 경로를 모두 덮고, 메시지에 `타입`, 참조 id, 실제 타입(`할일`), 기대 target(`물건`)이 포함되는 계약을 검증한다.
+
+## 2026-07-04
+
+- Task 2 categories.yaml 로딩 시작: 요구된 순서대로 먼저 `crates/lifeops-core/src/schema/categories.rs`에 `CategoryDef`와 loader 테스트 3개를 추가하고, `schema/mod.rs`에는 아직 등록하지 않았다.
+- RED 확인 1: `cargo test -p lifeops-core 카테고리`는 Rust module 등록 전이라 exit 0이지만 `running 0 tests`로 끝났다. 파일의 테스트가 컴파일 대상이 아님을 확인했으며, spec의 "module mechanics 차이" 케이스로 기록한다.
+- RED 확인 2: `schema/mod.rs`에 `categories` 모듈과 public re-export를 연결한 뒤 skeleton 상태로 같은 명령을 재실행하자 `load categories.yaml` `todo!` panic으로 실패했다. 새 테스트가 실제 loader 구현을 요구함을 확인했다.
+- 변경: `load_categories(path)`는 파일이 없으면 빈 목록을 반환하고, 있으면 `categories:` 목록을 `CategoryDef` 순서대로 역직렬화한다. 깨진 YAML은 파일명만 담은 `SchemaError::Parse { file, source }`로 변환한다.
+- 결정: `CategoryDef`는 후속 API/frontend에서 그대로 직렬화할 수 있도록 `Deserialize`, `Serialize`, `Clone`, `PartialEq`, `Debug`를 함께 derive했다. `icon`과 `description`은 YAML 누락을 허용하기 위해 `#[serde(default)] Option<String>`으로 둔다.
+- GREEN 확인: `cargo test -p lifeops-core 카테고리`는 1 passed, `cargo test -p lifeops-core`는 unit 60 passed + integration 1 passed + doc-tests 0 passed로 통과했다.
+- 포맷 확인: task 범위 파일은 `rustfmt --edition 2021 --check crates/lifeops-core/src/schema/categories.rs crates/lifeops-core/src/schema/mod.rs`와 `git diff --check`를 통과했다. workspace 전체 `cargo fmt --check`는 기존 core/server 파일들의 포맷 diff를 보고해 이번 task에서 건드리지 않았다.
