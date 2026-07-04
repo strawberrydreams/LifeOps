@@ -16,12 +16,23 @@ async fn main() {
 
     let schemas_dir = Path::new("schemas").to_path_buf();
     let views_dir = Path::new("views").to_path_buf();
+    let categories_path = Path::new("categories.yaml").to_path_buf();
     let schemas = SchemaSet::load_dir(&schemas_dir).expect("schemas/ 로드 실패");
     let pages = PageSet::load_dir(&views_dir).expect("views/ 로드 실패");
+    let categories =
+        lifeops_core::schema::load_categories(&categories_path).expect("categories.yaml 로드 실패");
     let store = EntityStore::open(Path::new("data/lifeops.db"))
         .await
         .expect("DB 열기 실패");
-    let state = state::AppState::new(schemas, pages, store, schemas_dir, views_dir);
+    let state = state::AppState::new(
+        schemas,
+        pages,
+        categories,
+        store,
+        schemas_dir,
+        views_dir,
+        categories_path,
+    );
 
     backup::spawn_daily_backup(
         std::path::PathBuf::from("data/lifeops.db"),
