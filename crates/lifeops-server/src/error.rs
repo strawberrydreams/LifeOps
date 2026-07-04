@@ -69,6 +69,7 @@ impl From<ViewError> for ApiError {
             | ViewError::UnknownField { .. }
             | ViewError::BadAggregate { .. }
             | ViewError::CurrencyMismatch { .. }
+            | ViewError::BadDateToken { .. }
             | ViewError::DuplicatePage { .. } => ApiError(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": { "code": "view", "message": e.to_string() } }),

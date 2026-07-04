@@ -67,6 +67,11 @@ pub enum ViewError {
         view: String,
         field: String,
     },
+    BadDateToken {
+        view: String,
+        field: String,
+        token: String,
+    },
     Io(std::io::Error),
     Parse {
         file: String,
@@ -98,6 +103,10 @@ impl std::fmt::Display for ViewError {
                     "뷰 '{view}' 필드 '{field}': 통화가 섞여 합계를 낼 수 없음"
                 )
             }
+            ViewError::BadDateToken { view, field, token } => write!(
+                f,
+                "뷰 '{view}' 필드 '{field}': 날짜 토큰 '{token}'은 date 필드에서만, $today[±Nd] 형식만 지원"
+            ),
             ViewError::Io(source) => write!(f, "페이지 디렉터리 로드 실패: {source}"),
             ViewError::Parse { file, source } => {
                 write!(f, "{file}: 페이지 YAML 파싱 실패: {source}")
@@ -123,6 +132,7 @@ impl std::error::Error for ViewError {
             | ViewError::UnknownField { .. }
             | ViewError::BadAggregate { .. }
             | ViewError::CurrencyMismatch { .. }
+            | ViewError::BadDateToken { .. }
             | ViewError::DuplicatePage { .. } => None,
         }
     }
