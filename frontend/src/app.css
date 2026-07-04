@@ -53,3 +53,10 @@
 .todo .empty-card { border: 1px dashed #bbb; border-radius: 0.5rem; padding: 1rem; color: #666; }
 .todo .quick-add { width: 100%; margin-top: 0.5rem; padding: 0.4rem; }
 .todo .error { color: #a00; }
+
+/* Browse */
+.browse-header { display: flex; justify-content: space-between; align-items: flex-end; }
+.browse-header .crumb { color: #888; margin: 0; font-size: 0.85rem; }
+.browse-header .count { color: #888; font-size: 0.9rem; font-weight: normal; }
+.browse-header .new { padding: 0.4rem 0.8rem; cursor: pointer; }
+.empty-card { border: 1px dashed #bbb; border-radius: 0.5rem; padding: 2rem; text-align: center; color: #666; }
