@@ -20,6 +20,7 @@ describe("PageRenderer", () => {
     const blocks: PageBlock[] = [
       {
         view: "카드뷰",
+        source: "물건",
         layout: "card",
         columns: ["이름"],
         entities: [{ id: "e1", type: "물건", data: { 이름: "A" }, created_at: "", updated_at: "" }],
@@ -37,6 +38,7 @@ describe("PageRenderer", () => {
     const blocks: PageBlock[] = [
       {
         view: "카드뷰",
+        source: "물건",
         layout: "card",
         columns: ["이름", "가격"],
         entities: [

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ApiError, createEntity, listEntities } from "./api";
+import { ApiError, createEntity, getSchemas, listEntities, updateEntity } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn().mockResolvedValue({
@@ -38,6 +38,19 @@ describe("api", () => {
     expect(decodeURIComponent(url)).toContain("type=물건");
     expect(decodeURIComponent(url)).toContain("상태=위시");
     expect(decodeURIComponent(url)).toContain("sort=-가격");
+  });
+
+  it("getSchemas는 types와 categories를 반환한다", async () => {
+    vi.stubGlobal("fetch", mockFetch(200, { types: { 노트: { name: "노트", fields: {} } }, categories: [{ name: "메모" }] }));
+    const res = await getSchemas();
+    expect(res.types["노트"].name).toBe("노트");
+    expect(res.categories[0].name).toBe("메모");
+  });
+
+  it("updateEntity는 spawned를 그대로 전달한다", async () => {
+    vi.stubGlobal("fetch", mockFetch(200, { id: "1", type: "할일", data: { 완료: true }, created_at: "", updated_at: "", spawned: { id: "2", type: "할일", data: { 완료: false }, created_at: "", updated_at: "" } }));
+    const res = await updateEntity("1", { 완료: true });
+    expect(res.spawned?.id).toBe("2");
   });
 
   it("204 응답(삭제)은 값 없이 통과한다", async () => {

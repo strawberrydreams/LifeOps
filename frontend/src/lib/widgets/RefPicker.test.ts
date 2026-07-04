@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/svelte";
+import { render, fireEvent, screen, waitFor } from "@testing-library/svelte";
 import RefPicker from "./RefPicker.svelte";
 import type { Entity, ResolvedField } from "../types";
 import * as api from "../api";
@@ -62,6 +62,18 @@ describe("RefPicker", () => {
     first.resolve([entity("w1", "세이코")]);
     await waitFor(() => expect(queryByText("세이코")).not.toBeInTheDocument());
     expect(queryByText("오리스")).toBeInTheDocument();
+  });
+
+  it("target 없으면 type 파라미터 없이 전 타입을 검색한다", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    } as Response);
+    render(RefPicker, { field: { kind: "ref", required: false }, value: null, onchange: () => {} });
+    await fireEvent.input(screen.getByPlaceholderText("검색..."), { target: { value: "미" } });
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    expect(String(spy.mock.calls.at(-1)?.[0])).not.toContain("type=%EB");
   });
 
   it("최신 검색 실패 시 결과를 비우고 드롭다운을 닫는다", async () => {

@@ -25,21 +25,16 @@
 
   function label(e: Entity): string {
     const firstStr = Object.values(e.data).find((v) => typeof v === "string" && v.length > 0);
-    return (firstStr as string) ?? e.id;
+    const base = (firstStr as string) ?? e.id;
+    return field.target ? base : `[${e.type}] ${base}`;
   }
 
   async function search(q: string) {
     const requestId = ++requestSeq;
     query = q;
     open = true;
-    if (!field.target) {
-      results = [];
-      open = false;
-      return;
-    }
-
     try {
-      const all = await listEntities(field.target, {});
+      const all = await listEntities(field.target ?? "", {});
       if (requestId !== requestSeq) return;
       results = q ? all.filter((e) => label(e).includes(q)) : all;
       open = true;

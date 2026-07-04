@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SchemaMap } from "./lib/types";
+  import type { Category, SchemaMap } from "./lib/types";
   import { getSchemas } from "./lib/api";
   import { router } from "./lib/router.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -10,15 +10,16 @@
   import PageView from "./lib/pages/PageView.svelte";
 
   let schemas = $state<SchemaMap>({});
+  let categories = $state<Category[]>([]);
   let loaded = $state(false);
   $effect(() => {
-    getSchemas().then((s) => { schemas = s; loaded = true; });
+    getSchemas().then((r) => { schemas = r.types; categories = r.categories; loaded = true; });
   });
 </script>
 
 <div class="app">
   {#if loaded}
-    <Sidebar schemas={schemas} onreloaded={(s) => (schemas = s)} />
+    <Sidebar schemas={schemas} categories={categories} onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
     <main>
       {#if router.route.name === "home"}
         <Home schemas={schemas} />

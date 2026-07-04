@@ -1,4 +1,4 @@
-import type { Entity, FieldErrorItem, RefEdge, SchemaMap } from "./types";
+import type { Entity, FieldErrorItem, RefEdge, SchemasResponse } from "./types";
 
 interface ApiErrorEnvelope {
   error?: {
@@ -11,11 +11,16 @@ interface ApiErrorEnvelope {
 
 export interface PageBlock {
   view: string;
+  source: string;
+  filter?: Record<string, unknown> | null;
+  sort?: string | null;
   layout: "table" | "checklist" | "card";
   columns?: string[] | null;
   entities: Entity[];
   aggregates: Record<string, unknown>;
 }
+
+export type UpdatedEntity = Entity & { spawned?: Entity; recurrence_warning?: string };
 
 export class ApiError extends Error {
   code: string;
@@ -62,12 +67,12 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return json as T;
 }
 
-export function getSchemas(): Promise<SchemaMap> {
+export function getSchemas(): Promise<SchemasResponse> {
   return request("GET", "/api/schemas");
 }
 
 export function listEntities(type: string, params: Record<string, string> = {}): Promise<Entity[]> {
-  const query = new URLSearchParams({ type, ...params });
+  const query = new URLSearchParams(type ? { type, ...params } : params);
   return request("GET", `/api/entities?${query.toString()}`);
 }
 
@@ -79,7 +84,7 @@ export function getEntity(id: string): Promise<{ entity: Entity; backlinks: RefE
   return request("GET", `/api/entities/${encodeURIComponent(id)}`);
 }
 
-export function updateEntity(id: string, patch: Record<string, unknown>): Promise<Entity> {
+export function updateEntity(id: string, patch: Record<string, unknown>): Promise<UpdatedEntity> {
   return request("PATCH", `/api/entities/${encodeURIComponent(id)}`, patch);
 }
 

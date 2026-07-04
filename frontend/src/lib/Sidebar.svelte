@@ -1,9 +1,14 @@
 <script lang="ts">
-  import type { SchemaMap } from "./types";
+  import type { Category, SchemaMap, SchemasResponse } from "./types";
   import { navigate } from "./router.svelte";
   import { reload, getSchemas } from "./api";
 
-  let { schemas, onreloaded }: { schemas: SchemaMap; onreloaded: (s: SchemaMap) => void } = $props();
+  let { schemas, categories, onreloaded }: {
+    schemas: SchemaMap;
+    categories: Category[];
+    onreloaded: (r: SchemasResponse) => void;
+  } = $props();
+  void categories;
 
   async function doReload() {
     await reload();
