@@ -46,9 +46,15 @@ pub async fn run_view_at(
     if let Some(sort) = &block.sort {
         sort_entities(&mut entities, schema, sort);
     }
+    if let Some(limit) = block.limit {
+        entities.truncate(limit);
+    }
 
     Ok(ViewResult {
         view: block.view.clone(),
+        source: block.source.clone(),
+        filter: block.filter.clone(),
+        sort: block.sort.clone(),
         layout: block.layout,
         columns: block.columns.clone(),
         entities,
@@ -104,11 +110,18 @@ fn validate_filter(
 fn validate_sort(block: &ViewBlock, schema: &ResolvedSchema) -> Result<(), ViewError> {
     if let Some(sort) = &block.sort {
         let field = sort.strip_prefix('-').unwrap_or(sort);
+        if is_system_column(field) {
+            return Ok(());
+        }
         if !schema.fields.contains_key(field) {
             return Err(unknown_field(block, field));
         }
     }
     Ok(())
+}
+
+pub fn is_system_column(field: &str) -> bool {
+    field == "updated_at" || field == "created_at"
 }
 
 fn unknown_field(block: &ViewBlock, field: &str) -> ViewError {
@@ -311,6 +324,22 @@ pub fn sort_entities(entities: &mut [Entity], schema: &ResolvedSchema, sort: &st
         Some(field) => (true, field),
         None => (false, sort),
     };
+    if is_system_column(field) {
+        entities.sort_by(|l, r| {
+            let (a, b) = if field == "updated_at" {
+                (&l.updated_at, &r.updated_at)
+            } else {
+                (&l.created_at, &r.created_at)
+            };
+            let ord = a.cmp(b);
+            if descending {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+        return;
+    }
     let kind = &schema.fields[field].kind;
 
     entities.sort_by(|left, right| {
@@ -754,5 +783,36 @@ mod tests {
         assert_eq!(resolve_today_token("$today-3d", d("2026-07-03")).unwrap(), "2026-06-30");
         assert!(resolve_today_token("$today+7", d("2026-07-03")).is_none()); // d 누락
         assert!(resolve_today_token("어제", d("2026-07-03")).is_none());
+    }
+
+    #[tokio::test]
+    async fn limit은_정렬_후_상위_n행() {
+        let s = schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        seed(&store, &s).await;
+        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nsort: -가격\nlimit: 2\n"), d("2026-07-03")).await.unwrap();
+        let names: Vec<&str> = r.entities.iter().map(|e| e.data["이름"].as_str().unwrap()).collect();
+        assert_eq!(names, ["C", "A"]);
+    }
+
+    #[tokio::test]
+    async fn 시스템컬럼_updated_at_정렬() {
+        let s = schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let a = store.create(&s, "물건", obj(json!({ "이름": "먼저" }))).await.unwrap();
+        store.create(&s, "물건", obj(json!({ "이름": "나중" }))).await.unwrap();
+        store.update(&s, &a.id, obj(json!({ "이름": "먼저(수정)" }))).await.unwrap(); // 먼저를 최신으로
+        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nsort: \"-updated_at\"\n"), d("2026-07-03")).await.unwrap();
+        assert_eq!(r.entities[0].data["이름"], json!("먼저(수정)"));
+    }
+
+    #[tokio::test]
+    async fn viewresult는_source_filter_sort를_에코한다() {
+        let s = schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\nsort: 배송예정일\n"), d("2026-07-03")).await.unwrap();
+        assert_eq!(r.source, "물건");
+        assert_eq!(r.sort.as_deref(), Some("배송예정일"));
+        assert_eq!(r.filter.as_ref().unwrap()["상태"], json!("주문됨"));
     }
 }

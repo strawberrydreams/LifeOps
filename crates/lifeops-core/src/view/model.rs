@@ -29,6 +29,8 @@ pub struct ViewBlock {
     /// 집계명 -> "함수(필드)" 문자열 (예: "sum(가격)")
     #[serde(default)]
     pub aggregate: Option<IndexMap<String, String>>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -40,6 +42,9 @@ pub struct PageDef {
 #[derive(Debug, Clone, Serialize)]
 pub struct ViewResult {
     pub view: String,
+    pub source: String,
+    pub filter: Option<Filter>,
+    pub sort: Option<String>,
     pub layout: Layout,
     pub columns: Option<Vec<String>>,
     pub entities: Vec<Entity>,
