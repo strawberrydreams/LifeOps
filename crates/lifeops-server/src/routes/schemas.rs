@@ -508,6 +508,17 @@ fn impact_changes(
             old: old.clone(),
             new: new.clone(),
         });
+        if let (Some(existing_field), Some(new_field)) =
+            (existing_raw.fields.get(old), raw.fields.get(new))
+        {
+            if existing_field.kind != new_field.kind {
+                changes.push(ImpactChange::KindChanged {
+                    field: new.clone(),
+                    old_kind: existing_field.kind.clone(),
+                    new_kind: new_field.kind.clone(),
+                });
+            }
+        }
     }
     for (field, existing_field) in &existing_raw.fields {
         let Some(new_field) = raw.fields.get(field) else {
@@ -969,6 +980,52 @@ mod tests {
         assert!(warnings.iter().any(|w| {
             let w = w.as_str().unwrap();
             w.contains("이름") && w.contains("명칭") && w.contains("1")
+        }));
+    }
+
+    #[tokio::test]
+    async fn dry_run_rename과_kind변경이_같이_있으면_둘다_warning을_반환한다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        app.clone()
+            .oneshot(post(
+                "/api/entities",
+                json!({
+                    "type": "물건",
+                    "data": { "이름": "잡화", "가격": { "amount": 12000, "currency": "KRW" } }
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let res = app
+            .oneshot(put(
+                "/api/schemas/물건?dry_run=true",
+                json!({
+                    "type": "물건",
+                    "category": "컬렉션",
+                    "fields": {
+                        "이름": { "kind": "text", "required": true },
+                        "상태": { "kind": "enum", "options": ["위시", "주문됨", "보유", "과거"] },
+                        "비용": { "kind": "text" }
+                    },
+                    "renames": { "가격": "비용" }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+        assert_eq!(body["affected_entities"], json!(1));
+        let warnings = body["warnings"].as_array().unwrap();
+        assert!(warnings.iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("가격") && w.contains("비용") && w.contains("이름 변경")
+        }));
+        assert!(warnings.iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("비용") && w.contains("kind") && w.contains("money") && w.contains("text")
         }));
     }
 
