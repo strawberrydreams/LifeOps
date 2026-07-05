@@ -6,7 +6,7 @@ use axum::Json;
 use indexmap::IndexMap;
 use lifeops_core::error::SchemaError;
 use lifeops_core::schema::{
-    load_raw_dir, to_yaml, RawBehaviors, RawFieldDef, RawSchema, SchemaSet,
+    load_raw_dir, to_yaml, FieldKind, RawBehaviors, RawFieldDef, RawSchema, SchemaSet,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -89,10 +89,12 @@ pub async fn update(
 }
 
 pub async fn delete(
-    State(_st): State<AppState>,
-    Path(_name): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(not_implemented())
+    State(st): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    safe_filename(&name)?;
+    delete_schema(&st, &name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn not_implemented() -> ApiError {
@@ -284,6 +286,71 @@ async fn update_schema(
         affected_entities: impact_report.affected_entities,
         warnings: impact_report.warnings,
     })
+}
+
+async fn delete_schema(st: &AppState, name: &str) -> Result<(), ApiError> {
+    let mut schemas = st.schemas.write().await;
+    if schemas.get(name).is_none() {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            json!({ "error": { "code": "unknown_type", "message": format!("알 수 없는 타입 '{name}'") } }),
+        ));
+    }
+
+    let entities = st.store.list(&[name.to_string()]).await?;
+    if !entities.is_empty() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            json!({ "error": { "code": "schema_in_use", "message": format!("타입 '{name}'의 엔티티가 있어 삭제할 수 없습니다") } }),
+        ));
+    }
+
+    let mut candidates = load_raw_dir(&st.schemas_dir).map_err(schema_error_to_api)?;
+    let Some((_, filename)) = candidates.get(name).cloned() else {
+        tracing::error!("메모리에는 있지만 파일에는 없는 스키마 타입: {name}");
+        return Err(ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": { "code": "schema_load", "message": "내부 서버 오류" } }),
+        ));
+    };
+
+    validate_delete_references(name, &candidates)?;
+
+    candidates.shift_remove(name);
+    let new_set = SchemaSet::from_raw(&candidates).map_err(schema_error_to_api)?;
+    std::fs::remove_file(st.schemas_dir.join(filename))
+        .map_err(|err| io_api_error("schema_delete", err))?;
+
+    *schemas = new_set;
+    Ok(())
+}
+
+fn validate_delete_references(
+    name: &str,
+    candidates: &IndexMap<String, (RawSchema, String)>,
+) -> Result<(), ApiError> {
+    for (other_name, (schema, _)) in candidates {
+        if other_name == name {
+            continue;
+        }
+        if schema.extends.as_deref() == Some(name) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                json!({ "error": { "code": "schema_referenced", "message": format!("타입 '{other_name}'이 '{name}'을 extends하여 삭제할 수 없습니다") } }),
+            ));
+        }
+        for (field_name, field) in &schema.fields {
+            if field.target.as_deref() == Some(name)
+                && FieldKind::parse(&field.kind).is_some_and(|kind| kind.contains_ref())
+            {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    json!({ "error": { "code": "schema_referenced", "message": format!("타입 '{other_name}'의 필드 '{field_name}'가 '{name}'을 참조하여 삭제할 수 없습니다") } }),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_immutable_update(
@@ -544,6 +611,14 @@ mod tests {
             .uri(uri)
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    fn del(uri: &str) -> Request<Body> {
+        Request::builder()
+            .method("DELETE")
+            .uri(uri)
+            .body(Body::empty())
             .unwrap()
     }
 
@@ -1050,5 +1125,206 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         let body = body_json(res).await;
         assert_eq!(body["error"]["code"], "schema_immutable");
+    }
+
+    #[tokio::test]
+    async fn 빈_미참조_타입은_삭제된다() {
+        let (state, _dir) = test_state().await;
+        let sdir = state.schemas_dir.clone();
+        let app = build_app(state);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "북마크",
+                    "fields": { "제목": { "kind": "text", "required": true } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        assert!(sdir.join("북마크.yaml").exists());
+
+        let res = app
+            .clone()
+            .oneshot(del("/api/schemas/북마크"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        assert!(!sdir.join("북마크.yaml").exists());
+
+        let body = body_json(
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/schemas")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(body["types"].get("북마크").is_none());
+    }
+
+    #[tokio::test]
+    async fn 엔티티_있는_타입_삭제는_409() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/entities",
+                json!({
+                    "type": "물건",
+                    "data": { "이름": "잡화" }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app.oneshot(del("/api/schemas/물건")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn 자식이_extends하는_타입_삭제는_409() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app.oneshot(del("/api/schemas/물건")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn ref_target으로_참조되는_타입_삭제는_409() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "장소",
+                    "fields": { "이름": { "kind": "text", "required": true } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "방문",
+                    "fields": { "곳": { "kind": "ref", "target": "장소" } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app.oneshot(del("/api/schemas/장소")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn non_ref_target_메타데이터는_타입_삭제를_막지_않는다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "장소",
+                    "fields": { "이름": { "kind": "text", "required": true } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "방문메모",
+                    "fields": { "장소명": { "kind": "text", "target": "장소" } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app.clone().oneshot(del("/api/schemas/장소")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+        let body = body_json(
+            app.oneshot(
+                Request::builder()
+                    .uri("/api/schemas")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert!(body["types"].get("장소").is_none());
+        assert!(body["types"].get("방문메모").is_some());
+    }
+
+    #[tokio::test]
+    async fn list_ref_target으로_참조되는_타입_삭제는_409() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "장소",
+                    "fields": { "이름": { "kind": "text", "required": true } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app
+            .clone()
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "여행",
+                    "fields": { "장소들": { "kind": "list<ref>", "target": "장소" } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+
+        let res = app.oneshot(del("/api/schemas/장소")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn 없는_타입_삭제는_404() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app.oneshot(del("/api/schemas/없는타입")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 }
