@@ -3,7 +3,9 @@ export type Route =
   | { name: "browse"; type: string; params: Record<string, string> }
   | { name: "entity"; id: string }
   | { name: "new"; type: string }
-  | { name: "page"; pageName: string };
+  | { name: "page"; pageName: string }
+  | { name: "type-new" }
+  | { name: "type-edit"; type: string };
 
 export function parseRoute(url: string): Route {
   const [path, query = ""] = url.split("?");
@@ -11,6 +13,8 @@ export function parseRoute(url: string): Route {
   const params: Record<string, string> = {};
   new URLSearchParams(query).forEach((v, k) => (params[k] = v));
   if (parts.length === 0) return { name: "home" };
+  if (parts[0] === "types" && parts[1] === "new") return { name: "type-new" };
+  if (parts[0] === "types" && parts[1] && parts[2] === "edit") return { name: "type-edit", type: parts[1] };
   if (parts[0] === "browse" && parts[1]) return { name: "browse", type: parts[1], params };
   if (parts[0] === "entity" && parts[1]) return { name: "entity", id: parts[1] };
   if (parts[0] === "new" && parts[1]) return { name: "new", type: parts[1] };

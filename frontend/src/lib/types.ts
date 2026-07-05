@@ -60,3 +60,36 @@ export interface ApiErrorBody {
     referrers?: RefEdge[];
   };
 }
+
+export interface SchemaFieldInput {
+  kind: string;
+  required?: boolean;
+  options?: string[];
+  target?: string | null;
+  unit?: string | null;
+}
+
+export interface SchemaWriteBody {
+  type?: string;
+  category?: string | null;
+  extends?: string | null;
+  behaviors?: { recurrence?: RecurrenceDef | null } | null;
+  fields: Record<string, SchemaFieldInput>;
+  field_order?: string[] | null;
+  renames?: Record<string, string>;
+}
+
+export interface RawSchemaResponse {
+  type: string;
+  category?: string | null;
+  extends?: string | null;
+  behaviors?: { recurrence?: RecurrenceDef | null } | null;
+  field_order?: string[] | null;
+  fields: Record<string, SchemaFieldInput>;
+  inherited: Record<string, ResolvedField>;
+}
+
+export interface DryRunResult {
+  affected_entities: number;
+  warnings: string[];
+}

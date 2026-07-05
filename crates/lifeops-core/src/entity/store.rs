@@ -4,6 +4,7 @@ use crate::schema::{FieldKind, ResolvedSchema, SchemaSet};
 use serde_json::{Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
+use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -235,6 +236,130 @@ impl EntityStore {
         let rows = query.fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(row_to_entity).collect())
     }
+
+    pub async fn rename_field(
+        &self,
+        types: &[String],
+        renames: &[(String, String)],
+    ) -> Result<u64, CoreError> {
+        if types.is_empty() || renames.is_empty() {
+            return Ok(0);
+        }
+        validate_rename_set(renames)?;
+
+        let placeholders = vec!["?"; types.len()].join(", ");
+        let sql = format!(
+            "SELECT id, type, data, created_at, updated_at FROM entities \
+             WHERE type IN ({placeholders})"
+        );
+        let mut tx = self.pool.begin().await?;
+
+        let mut query = sqlx::query(&sql);
+        for t in types {
+            query = query.bind(t);
+        }
+        let rows = query.fetch_all(&mut *tx).await?;
+        let mut entities: Vec<_> = rows.into_iter().map(row_to_entity).collect();
+        validate_rename_collisions(&entities, renames)?;
+
+        let now = now_rfc3339();
+        let mut changed = 0;
+        for entity in &mut entities {
+            let mut touched = false;
+            for (old, new) in renames {
+                if let Some(value) = entity.data.remove(old.as_str()) {
+                    entity.data.insert(new.clone(), value);
+                    touched = true;
+                }
+            }
+
+            if !touched {
+                continue;
+            }
+
+            sqlx::query("UPDATE entities SET data = ?, updated_at = ? WHERE id = ?")
+                .bind(serde_json::Value::Object(entity.data.clone()).to_string())
+                .bind(&now)
+                .bind(&entity.id)
+                .execute(&mut *tx)
+                .await?;
+            changed += 1;
+        }
+
+        for (old, new) in renames {
+            let ref_sql = format!(
+                "UPDATE refs SET field_name = ? \
+                 WHERE field_name = ? AND from_id IN \
+                 (SELECT id FROM entities WHERE type IN ({placeholders}))"
+            );
+            let mut ref_query = sqlx::query(&ref_sql).bind(new).bind(old);
+            for t in types {
+                ref_query = ref_query.bind(t);
+            }
+            ref_query.execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(changed)
+    }
+}
+
+fn validate_rename_set(renames: &[(String, String)]) -> Result<(), CoreError> {
+    let mut old_names = HashSet::new();
+    let mut new_names = HashSet::new();
+
+    for (old, new) in renames {
+        if !old_names.insert(old.as_str()) {
+            return Err(validation_error(
+                old,
+                format!("필드 이름 변경 old '{old}'가 중복됨"),
+            ));
+        }
+        if !new_names.insert(new.as_str()) {
+            return Err(validation_error(
+                new,
+                format!("필드 이름 변경 new '{new}'가 중복됨"),
+            ));
+        }
+    }
+
+    for (old, new) in renames {
+        if old_names.contains(new.as_str()) {
+            return Err(validation_error(
+                new,
+                format!("필드 이름 변경 '{old}' -> '{new}'가 다른 변경의 old와 겹침"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_rename_collisions(
+    entities: &[Entity],
+    renames: &[(String, String)],
+) -> Result<(), CoreError> {
+    for entity in entities {
+        for (old, new) in renames {
+            if entity.data.contains_key(old.as_str()) && entity.data.contains_key(new.as_str()) {
+                return Err(validation_error(
+                    new,
+                    format!(
+                        "엔티티 '{}'에 '{old}'와 '{new}'가 모두 있어 이름 변경 시 데이터를 덮어씀",
+                        entity.id
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validation_error(field: impl Into<String>, message: impl Into<String>) -> CoreError {
+    CoreError::Validation(ValidationError(vec![FieldError {
+        field: field.into(),
+        message: message.into(),
+    }]))
 }
 
 pub(crate) fn row_to_entity(row: sqlx::sqlite::SqliteRow) -> Entity {
@@ -702,5 +827,158 @@ mod tests {
         assert_eq!(all.len(), 3);
         let none = store.list(&[]).await.unwrap();
         assert!(none.is_empty());
+    }
+
+    #[tokio::test]
+    async fn 필드_이름을_family_전체에서_바꾼다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas(); // 시계 extends 물건
+        let w = store
+            .create(
+                &schemas,
+                "시계",
+                obj(json!({ "이름": "미쿠", "무브먼트": "쿼츠" })),
+            )
+            .await
+            .unwrap();
+        let m = store
+            .create(&schemas, "물건", obj(json!({ "이름": "잡화" })))
+            .await
+            .unwrap();
+        let t = store
+            .create(&schemas, "할일", obj(json!({ "내용": "무브먼트 확인" })))
+            .await
+            .unwrap();
+
+        let family = schemas.family_of("물건");
+        let n = store
+            .rename_field(
+                &family,
+                &[("무브먼트".to_string(), "구동방식".to_string())],
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+
+        let w2 = store.get(&w.id).await.unwrap().unwrap();
+        assert!(!w2.data.contains_key("무브먼트"));
+        assert_eq!(w2.data["구동방식"], "쿼츠");
+        let m2 = store.get(&m.id).await.unwrap().unwrap();
+        assert!(!m2.data.contains_key("구동방식"));
+        let t2 = store.get(&t.id).await.unwrap().unwrap();
+        assert_eq!(t2.data["내용"], "무브먼트 확인");
+    }
+
+    #[tokio::test]
+    async fn ref_필드_이름변경은_backlink_field_name도_갱신한다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let watch = store
+            .create(&schemas, "시계", obj(json!({ "이름": "미쿠" })))
+            .await
+            .unwrap();
+        store
+            .create(
+                &schemas,
+                "할일",
+                obj(json!({ "내용": "개봉", "관련물건": [watch.id.clone()] })),
+            )
+            .await
+            .unwrap();
+
+        let n = store
+            .rename_field(
+                &["할일".to_string()],
+                &[("관련물건".to_string(), "관련".to_string())],
+            )
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let back = store.backlinks(&watch.id).await.unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].field_name, "관련");
+    }
+
+    #[tokio::test]
+    async fn 필드_이름변경은_대상_키가_이미_있으면_거부하고_데이터를_보존한다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let item = store
+            .create(
+                &schemas,
+                "물건",
+                obj(json!({ "이름": "old", "상태": "위시" })),
+            )
+            .await
+            .unwrap();
+
+        let err = store
+            .rename_field(
+                &["물건".to_string()],
+                &[("이름".to_string(), "상태".to_string())],
+            )
+            .await
+            .unwrap_err();
+        let CoreError::Validation(v) = err else {
+            panic!("Validation이어야 함")
+        };
+        let message = v.to_string();
+        assert!(message.contains("이름"), "메시지: {message}");
+        assert!(message.contains("상태"), "메시지: {message}");
+
+        let loaded = store.get(&item.id).await.unwrap().unwrap();
+        assert_eq!(loaded.data["이름"], "old");
+        assert_eq!(loaded.data["상태"], "위시");
+    }
+
+    #[tokio::test]
+    async fn 필드_이름변경은_겹치거나_연쇄되는_rename_set을_거부한다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let schemas = test_schemas();
+        let item = store
+            .create(&schemas, "물건", obj(json!({ "이름": "old" })))
+            .await
+            .unwrap();
+
+        let err = store
+            .rename_field(
+                &["물건".to_string()],
+                &[
+                    ("이름".to_string(), "상태".to_string()),
+                    ("상태".to_string(), "가격".to_string()),
+                ],
+            )
+            .await
+            .unwrap_err();
+        let CoreError::Validation(v) = err else {
+            panic!("Validation이어야 함")
+        };
+        let message = v.to_string();
+        assert!(message.contains("상태"), "메시지: {message}");
+
+        let loaded = store.get(&item.id).await.unwrap().unwrap();
+        assert_eq!(loaded.data["이름"], "old");
+        assert!(!loaded.data.contains_key("상태"));
+        assert!(!loaded.data.contains_key("가격"));
+    }
+
+    #[tokio::test]
+    async fn 필드_이름변경은_빈_입력이면_noop이다() {
+        let store = EntityStore::open_in_memory().await.unwrap();
+        assert_eq!(store.rename_field(&[], &[]).await.unwrap(), 0);
+        assert_eq!(
+            store
+                .rename_field(&["물건".to_string()], &[])
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .rename_field(&[], &[("이름".to_string(), "명칭".to_string())])
+                .await
+                .unwrap(),
+            0
+        );
     }
 }

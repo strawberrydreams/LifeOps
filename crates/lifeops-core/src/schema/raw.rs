@@ -3,25 +3,25 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawSchema {
     #[serde(rename = "type")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_behaviors")]
     pub behaviors: Option<RawBehaviors>,
     #[serde(default)]
     pub fields: IndexMap<String, RawFieldDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field_order: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct RawBehaviors {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurrence: Option<RecurrenceDef>,
 }
 
@@ -32,17 +32,28 @@ pub struct RecurrenceDef {
     pub date: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawFieldDef {
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_empty_behaviors(behaviors: &Option<RawBehaviors>) -> bool {
+    match behaviors {
+        None => true,
+        Some(behaviors) => behaviors.recurrence.is_none(),
+    }
 }
 
 pub fn load_raw_dir(dir: &Path) -> Result<IndexMap<String, (RawSchema, String)>, SchemaError> {

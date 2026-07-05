@@ -21,7 +21,10 @@
       <p class="crumb">{category} › {type}</p>
       <h1>{type} <span class="count">{loaded ? `${entities.length}개` : ""}</span></h1>
     </div>
-    <button type="button" class="new" onclick={() => navigate(`/new/${encodeURIComponent(type)}`)}>+ 새 {type}</button>
+    <div class="actions">
+      <button type="button" class="settings" onclick={() => navigate(`/types/${encodeURIComponent(type)}/edit`)}>타입 설정</button>
+      <button type="button" class="new" onclick={() => navigate(`/new/${encodeURIComponent(type)}`)}>+ 새 {type}</button>
+    </div>
   </header>
   {#if loaded && entities.length === 0}
     <div class="empty-card">

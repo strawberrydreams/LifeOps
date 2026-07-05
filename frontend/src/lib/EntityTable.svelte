@@ -12,7 +12,7 @@
     schemas?: SchemaMap;
   } = $props();
 
-  let rows = $state<Entity[]>(entities);
+  let rows = $state<Entity[]>([]);
   $effect(() => { rows = entities; });
 
   const cols = $derived(columns ?? Object.keys(schema.fields));

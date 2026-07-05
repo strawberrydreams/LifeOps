@@ -24,4 +24,9 @@ describe("Sidebar", () => {
     expect(screen.getByText(/기타/)).toBeInTheDocument();
     expect(screen.getByText(/홈/)).toBeInTheDocument();
   });
+
+  it("카테고리마다 새 타입 버튼이 있다", () => {
+    render(Sidebar, { schemas, categories, onreloaded: () => {} });
+    expect(screen.getAllByTitle("새 타입").length).toBeGreaterThan(0);
+  });
 });

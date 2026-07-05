@@ -1,4 +1,12 @@
-import type { Entity, FieldErrorItem, RefEdge, SchemasResponse } from "./types";
+import type {
+  DryRunResult,
+  Entity,
+  FieldErrorItem,
+  RawSchemaResponse,
+  RefEdge,
+  SchemasResponse,
+  SchemaWriteBody,
+} from "./types";
 
 interface ApiErrorEnvelope {
   error?: {
@@ -102,4 +110,25 @@ export function getExport(): Promise<Record<string, Entity[]>> {
 
 export function reload(): Promise<{ ok: boolean }> {
   return request("POST", "/api/reload");
+}
+
+export function createSchema(body: SchemaWriteBody): Promise<{ ok: boolean }> {
+  return request("POST", "/api/schemas", body);
+}
+
+export function getSchemaRaw(type: string): Promise<RawSchemaResponse> {
+  return request("GET", `/api/schemas/${encodeURIComponent(type)}`);
+}
+
+export function updateSchema(
+  type: string,
+  body: SchemaWriteBody,
+  opts: { dryRun?: boolean } = {}
+): Promise<DryRunResult | { ok: boolean }> {
+  const suffix = opts.dryRun ? "?dry_run=true" : "";
+  return request("PUT", `/api/schemas/${encodeURIComponent(type)}${suffix}`, body);
+}
+
+export function deleteSchema(type: string): Promise<void> {
+  return request("DELETE", `/api/schemas/${encodeURIComponent(type)}`);
 }

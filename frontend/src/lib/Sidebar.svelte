@@ -38,6 +38,7 @@
       <button type="button" class="group-header" onclick={() => (collapsed[g.cat.name] = !collapsed[g.cat.name])}>
         {g.cat.icon ?? "📁"} {g.cat.name} <span class="chev">{collapsed[g.cat.name] ? "▸" : "▾"}</span>
       </button>
+      <button type="button" class="add-type" title="새 타입" onclick={() => navigate("/types/new")}>+ 새 타입</button>
       {#if !collapsed[g.cat.name]}
         <ul>
           {#each g.types as type (type)}

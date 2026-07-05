@@ -25,15 +25,18 @@ pub async fn page(
     State(st): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let pages = st.pages.read().await;
-    let Some(def) = pages.get(&name) else {
-        return Err(ApiError(
-            StatusCode::NOT_FOUND,
-            json!({ "error": { "code": "not_found", "message": format!("페이지 없음: {name}") } }),
-        ));
+    let def = {
+        let pages = st.pages.read().await;
+        let Some(def) = pages.get(&name) else {
+            return Err(ApiError(
+                StatusCode::NOT_FOUND,
+                json!({ "error": { "code": "not_found", "message": format!("페이지 없음: {name}") } }),
+            ));
+        };
+        def.clone()
     };
     let schemas = st.schemas.read().await;
-    let result = run_page(&st.store, &schemas, def).await?;
+    let result = run_page(&st.store, &schemas, &def).await?;
     Ok(Json(json!(result)))
 }
 
@@ -50,7 +53,9 @@ pub async fn export(State(st): State<AppState>) -> Result<Json<Value>, ApiError>
 
 /// POST /api/reload → 성공 시 스키마·페이지 교체, 실패 시 기존 유지 + 에러
 pub async fn reload(State(st): State<AppState>) -> Result<Json<Value>, ApiError> {
-    // 새로 파싱 (실패하면 여기서 반환되어 기존 상태 유지)
+    // schemas write lock을 잡은 채 disk snapshot을 만들어 create와 reload가
+    // 서로 stale schema set으로 memory를 덮어쓰지 못하게 한다.
+    let mut s = st.schemas.write().await;
     let new_schemas = SchemaSet::load_dir(&st.schemas_dir).map_err(|e| ApiError(
         StatusCode::BAD_REQUEST,
         json!({ "error": { "code": "reload_schema", "message": e.to_string() } }),
@@ -65,7 +70,6 @@ pub async fn reload(State(st): State<AppState>) -> Result<Json<Value>, ApiError>
         })?;
     // 세 락을 한 스코프에서 잡고 함께 교체해, 어떤 요청도
     // "새 스키마 + 옛 페이지" 같은 중간 상태를 관찰할 수 없게 한다.
-    let mut s = st.schemas.write().await;
     let mut p = st.pages.write().await;
     let mut c = st.categories.write().await;
     *s = new_schemas;

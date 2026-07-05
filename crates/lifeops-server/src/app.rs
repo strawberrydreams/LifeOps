@@ -1,7 +1,7 @@
-use crate::routes::{entities, misc};
+use crate::routes::{entities, misc, schemas};
 use crate::state::AppState;
 use crate::static_files::spa_fallback;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tower_http::services::ServeDir;
 
@@ -11,9 +11,17 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/entities", get(entities::list).post(entities::create))
         .route(
             "/api/entities/{id}",
-            get(entities::get_one).patch(entities::update).delete(entities::delete),
+            get(entities::get_one)
+                .patch(entities::update)
+                .delete(entities::delete),
         )
-        .route("/api/schemas", get(misc::schemas))
+        .route("/api/schemas", get(misc::schemas).post(schemas::create))
+        .route(
+            "/api/schemas/{type}",
+            get(schemas::get_one)
+                .merge(put(schemas::update))
+                .merge(delete(schemas::delete)),
+        )
         .route("/api/pages/{name}", get(misc::page))
         .route("/api/export", get(misc::export))
         .route("/api/reload", post(misc::reload));

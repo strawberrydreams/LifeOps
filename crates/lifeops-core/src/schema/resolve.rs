@@ -75,7 +75,9 @@ impl SchemaSet {
             }
             let mut fields = IndexMap::new();
             for (fname, def) in merged {
-                fields.insert(fname.clone(), convert_field(name, &fname, &def)?);
+                let field = convert_field(name, &fname, &def)?;
+                validate_ref_target(raw, name, &fname, &field)?;
+                fields.insert(fname.clone(), field);
             }
             if let Some(behaviors) = &behaviors {
                 validate_behaviors(name, behaviors, &fields)?;
@@ -172,6 +174,27 @@ fn convert_field(ty: &str, field: &str, def: &RawFieldDef) -> Result<ResolvedFie
         target: def.target.clone(),
         unit: def.unit.clone(),
     })
+}
+
+fn validate_ref_target(
+    raw: &IndexMap<String, (RawSchema, String)>,
+    ty: &str,
+    field: &str,
+    def: &ResolvedField,
+) -> Result<(), SchemaError> {
+    let is_ref = matches!(def.kind, FieldKind::Ref)
+        || matches!(&def.kind, FieldKind::List(inner) if **inner == FieldKind::Ref);
+    let Some(target) = &def.target else {
+        return Ok(());
+    };
+    if is_ref && !raw.contains_key(target) {
+        return Err(SchemaError::UnknownRefTarget {
+            ty: ty.to_string(),
+            field: field.to_string(),
+            target: target.clone(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_behaviors(
@@ -446,6 +469,19 @@ mod tests {
         let f = &set.get("할일").unwrap().fields["관련"];
         assert_eq!(f.kind, FieldKind::List(Box::new(FieldKind::Ref)));
         assert!(f.target.is_none());
+    }
+
+    #[test]
+    fn 명시한_ref_target이_없으면_에러() {
+        let err = set_from(&[(
+            "할일.yaml",
+            "type: 할일\nfields:\n  관련: { kind: ref, target: 유령 }\n",
+        )])
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("할일"));
+        assert!(msg.contains("관련"));
+        assert!(msg.contains("유령"));
     }
 
     #[test]

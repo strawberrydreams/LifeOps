@@ -8,6 +8,7 @@
   import Detail from "./lib/pages/Detail.svelte";
   import New from "./lib/pages/New.svelte";
   import PageView from "./lib/pages/PageView.svelte";
+  import TypeEditor from "./lib/pages/TypeEditor.svelte";
 
   let schemas = $state<SchemaMap>({});
   let categories = $state<Category[]>([]);
@@ -31,6 +32,10 @@
         <New schemas={schemas} type={router.route.type} />
       {:else if router.route.name === "page"}
         <PageView pageName={router.route.pageName} schemas={schemas} />
+      {:else if router.route.name === "type-new"}
+        <TypeEditor schemas={schemas} categories={categories} mode="new" onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
+      {:else if router.route.name === "type-edit"}
+        <TypeEditor schemas={schemas} categories={categories} mode="edit" type={router.route.type} onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
       {/if}
     </main>
   {:else}
@@ -40,6 +45,5 @@
 
 <style>
   .app { display: flex; gap: 1rem; }
-  .sidebar { width: 200px; }
   main { flex: 1; }
 </style>

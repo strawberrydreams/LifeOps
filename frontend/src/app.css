@@ -58,8 +58,67 @@
 .browse-header { display: flex; justify-content: space-between; align-items: flex-end; }
 .browse-header .crumb { color: #888; margin: 0; font-size: 0.85rem; }
 .browse-header .count { color: #888; font-size: 0.9rem; font-weight: normal; }
+.browse-header .actions { display: flex; gap: 0.5rem; align-items: center; }
+.browse-header .settings { padding: 0.4rem 0.8rem; cursor: pointer; }
 .browse-header .new { padding: 0.4rem 0.8rem; cursor: pointer; }
 .empty-card { border: 1px dashed #bbb; border-radius: 0.5rem; padding: 2rem; text-align: center; color: #666; }
+
+/* Schema editor */
+.sidebar .add-type { margin: 0.25rem 0 0.5rem; font-size: 0.85rem; }
+.field-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 132px auto minmax(150px, 1fr) auto auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.field-row .fname { min-width: 0; }
+.field-row .required {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  white-space: nowrap;
+}
+.type-editor {
+  display: grid;
+  gap: 1rem;
+  max-width: 980px;
+}
+.type-editor .basic {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+}
+.type-editor label {
+  display: grid;
+  gap: 0.25rem;
+}
+.type-editor .inherited,
+.type-editor .fields,
+.type-editor .recurrence,
+.type-editor .impact-modal {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem;
+}
+.type-editor h2 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+.type-editor .inherited span {
+  color: #64748b;
+  font-size: 0.875rem;
+}
+.type-editor .actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.type-editor .danger,
+.type-editor .error {
+  color: #b91c1c;
+}
 
 /* ValueCell */
 .badge { padding: 0.05rem 0.4rem; border-radius: 0.5rem; }

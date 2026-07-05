@@ -25,7 +25,7 @@
   );
   const hidesDone = $derived(block.filter?.[flagField] === false);
 
-  let rows = $state<Entity[]>(block.entities);
+  let rows = $state<Entity[]>([]);
   $effect(() => { rows = block.entities; });
   let draft = $state("");
   let error = $state<string | null>(null);
