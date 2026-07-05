@@ -58,4 +58,31 @@ describe("api", () => {
     const { deleteEntity } = await import("./api");
     await expect(deleteEntity("x")).resolves.toBeUndefined();
   });
+
+  it("updateSchema는 dry_run 쿼리를 붙인다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ affected_entities: 2, warnings: ["x"] }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { updateSchema } = await import("./api");
+    const res = await updateSchema("물건", { fields: {} }, { dryRun: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/schemas/%EB%AC%BC%EA%B1%B4?dry_run=true",
+      expect.objectContaining({ method: "PUT" })
+    );
+    expect(res).toEqual({ affected_entities: 2, warnings: ["x"] });
+  });
+
+  it("createSchema는 POST /api/schemas로 보낸다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 201 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { createSchema } = await import("./api");
+    await createSchema({ type: "북마크", fields: { 제목: { kind: "text" } } });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/schemas",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
 });

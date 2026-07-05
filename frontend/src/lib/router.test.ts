@@ -15,6 +15,13 @@ describe("parseRoute", () => {
   it("pages 커스텀 페이지", () => {
     expect(parseRoute("/pages/데일리 대시보드")).toMatchObject({ name: "page", pageName: "데일리 대시보드" });
   });
+  it("타입 생성/수정 라우트를 파싱한다", () => {
+    expect(parseRoute("/types/new")).toEqual({ name: "type-new" });
+    expect(parseRoute("/types/%EB%AC%BC%EA%B1%B4/edit")).toEqual({
+      name: "type-edit",
+      type: "물건",
+    });
+  });
   it("루트는 home", () => {
     expect(parseRoute("/")).toMatchObject({ name: "home" });
   });
