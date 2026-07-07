@@ -1,0 +1,8 @@
+type: 측정
+category: 기록
+fields:
+  지표: { kind: enum, options: [체중, 수면시간, 에너지, 스트레스, 잔고], required: true }
+  값:   { kind: number, required: true }
+  단위: { kind: text }
+  시각: { kind: date, required: true }
+  메모: { kind: text }

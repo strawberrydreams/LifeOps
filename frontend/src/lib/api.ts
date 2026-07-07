@@ -22,10 +22,25 @@ export interface PageBlock {
   source: string;
   filter?: Record<string, unknown> | null;
   sort?: string | null;
-  layout: "table" | "checklist" | "card";
+  layout: "table" | "checklist" | "card" | "chart" | "record";
   columns?: string[] | null;
+  x?: string | null;
+  y?: string | null;
+  series?: string | null;
+  chart_type?: "line" | "bar" | null;
   entities: Entity[];
   aggregates: Record<string, unknown>;
+  chart?: ChartSeries[] | null;
+}
+
+export interface ChartPoint {
+  x: unknown;
+  y: number;
+}
+
+export interface ChartSeries {
+  name: string;
+  points: ChartPoint[];
 }
 
 export type UpdatedEntity = Entity & { spawned?: Entity; recurrence_warning?: string };

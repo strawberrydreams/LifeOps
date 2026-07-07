@@ -70,6 +70,7 @@ impl From<ViewError> for ApiError {
             | ViewError::BadAggregate { .. }
             | ViewError::CurrencyMismatch { .. }
             | ViewError::BadDateToken { .. }
+            | ViewError::MissingChartAxis { .. }
             | ViewError::DuplicatePage { .. } => ApiError(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": { "code": "view", "message": e.to_string() } }),

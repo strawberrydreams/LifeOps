@@ -2,7 +2,9 @@
   import type { PageBlock } from "./api";
   import type { ResolvedField, SchemaMap } from "./types";
   import { navigate } from "./router.svelte";
+  import Chart from "./widgets/Chart.svelte";
   import ChecklistWidget from "./widgets/ChecklistWidget.svelte";
+  import QuickRecordWidget from "./widgets/QuickRecordWidget.svelte";
   import ValueCell from "./ValueCell.svelte";
 
   let { page, blocks, schemas }: { page: string; blocks: PageBlock[]; schemas: SchemaMap } = $props();
@@ -41,6 +43,10 @@
       {/if}
       {#if block.layout === "checklist"}
         <ChecklistWidget block={block} schemas={schemas} />
+      {:else if block.layout === "chart"}
+        <Chart series={block.chart ?? []} chartType={block.chart_type === "bar" ? "bar" : "line"} />
+      {:else if block.layout === "record"}
+        <QuickRecordWidget block={block} schemas={schemas} />
       {:else if block.layout === "card"}
         <div class="cards">
           {#each block.entities as e}

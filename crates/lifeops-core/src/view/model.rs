@@ -12,6 +12,16 @@ pub enum Layout {
     Table,
     Checklist,
     Card,
+    Chart,
+    Record,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChartType {
+    #[default]
+    Line,
+    Bar,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -31,6 +41,26 @@ pub struct ViewBlock {
     pub aggregate: Option<IndexMap<String, String>>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub x: Option<String>,
+    #[serde(default)]
+    pub y: Option<String>,
+    #[serde(default)]
+    pub series: Option<String>,
+    #[serde(default)]
+    pub chart_type: ChartType,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChartPoint {
+    pub x: serde_json::Value,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChartSeries {
+    pub name: String,
+    pub points: Vec<ChartPoint>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +79,10 @@ pub struct ViewResult {
     pub columns: Option<Vec<String>>,
     pub entities: Vec<Entity>,
     pub aggregates: IndexMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart_type: Option<ChartType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<Vec<ChartSeries>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +116,31 @@ mod tests {
         let cl: ViewBlock =
             serde_yaml::from_str("view: v\nsource: 할일\nlayout: checklist\n").unwrap();
         assert_eq!(cl.layout, Layout::Checklist);
+    }
+
+    #[test]
+    fn chart_블록_파싱_기본값() {
+        let b: ViewBlock = serde_yaml::from_str(
+            "view: 추세\nsource: 측정\nlayout: chart\nx: 시각\ny: 값\nseries: 지표\n",
+        )
+        .unwrap();
+        assert_eq!(b.layout, Layout::Chart);
+        assert_eq!(b.x.as_deref(), Some("시각"));
+        assert_eq!(b.y.as_deref(), Some("값"));
+        assert_eq!(b.series.as_deref(), Some("지표"));
+        assert_eq!(b.chart_type, ChartType::Line);
+
+        let bar: ViewBlock =
+            serde_yaml::from_str("view: v\nsource: 측정\nlayout: chart\nchart_type: bar\n")
+                .unwrap();
+        assert_eq!(bar.chart_type, ChartType::Bar);
+    }
+
+    #[test]
+    fn record_레이아웃_파싱() {
+        let block: ViewBlock =
+            serde_yaml::from_str("view: 빠른 기록\nsource: 측정\nlayout: record\n").unwrap();
+        assert_eq!(block.layout, Layout::Record);
     }
 
     #[test]

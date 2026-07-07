@@ -1,7 +1,7 @@
 use crate::entity::{Entity, EntityStore};
 use crate::error::ViewError;
 use crate::schema::{FieldKind, ResolvedSchema, SchemaSet};
-use crate::view::model::{Filter, ViewBlock, ViewResult};
+use crate::view::model::{ChartPoint, ChartSeries, Filter, Layout, ViewBlock, ViewResult};
 use chrono::NaiveDate;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -27,6 +27,7 @@ pub async fn run_view_at(
 
     validate_filter(block, schema, today)?;
     validate_sort(block, schema)?;
+    validate_chart(block, schema)?;
 
     let mut entities = store.list(&schemas.family_of(&block.source)).await?;
     if let Some(filter) = &block.filter {
@@ -49,6 +50,16 @@ pub async fn run_view_at(
     if let Some(limit) = block.limit {
         entities.truncate(limit);
     }
+    let chart = if block.layout == Layout::Chart {
+        Some(build_chart_series(block, &entities))
+    } else {
+        None
+    };
+    let chart_type = if block.layout == Layout::Chart {
+        Some(block.chart_type)
+    } else {
+        None
+    };
 
     Ok(ViewResult {
         view: block.view.clone(),
@@ -59,6 +70,8 @@ pub async fn run_view_at(
         columns: block.columns.clone(),
         entities,
         aggregates,
+        chart_type,
+        chart,
     })
 }
 
@@ -70,7 +83,11 @@ pub fn resolve_today_token(s: &str, today: NaiveDate) -> Option<String> {
     } else {
         rest.strip_suffix('d')?.parse().ok()? // "+7" / "-3"
     };
-    Some((today + chrono::Duration::days(days)).format("%Y-%m-%d").to_string())
+    Some(
+        (today + chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
 }
 
 fn validate_filter(
@@ -120,6 +137,41 @@ fn validate_sort(block: &ViewBlock, schema: &ResolvedSchema) -> Result<(), ViewE
     Ok(())
 }
 
+fn validate_chart(block: &ViewBlock, schema: &ResolvedSchema) -> Result<(), ViewError> {
+    if block.layout != Layout::Chart {
+        return Ok(());
+    }
+
+    let x = block
+        .x
+        .as_deref()
+        .ok_or_else(|| ViewError::MissingChartAxis {
+            view: block.view.clone(),
+            axis: "x",
+        })?;
+    let y = block
+        .y
+        .as_deref()
+        .ok_or_else(|| ViewError::MissingChartAxis {
+            view: block.view.clone(),
+            axis: "y",
+        })?;
+
+    if !is_system_column(x) && !schema.fields.contains_key(x) {
+        return Err(unknown_field(block, x));
+    }
+    if !is_system_column(y) && !schema.fields.contains_key(y) {
+        return Err(unknown_field(block, y));
+    }
+    if let Some(series) = &block.series {
+        if !schema.fields.contains_key(series) {
+            return Err(unknown_field(block, series));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn is_system_column(field: &str) -> bool {
     field == "updated_at" || field == "created_at"
 }
@@ -143,7 +195,12 @@ fn matches(entity: &Entity, schema: &ResolvedSchema, filter: &Filter, today: Nai
     })
 }
 
-fn match_one(actual: Option<&Value>, kind: &FieldKind, condition: &Value, today: NaiveDate) -> bool {
+fn match_one(
+    actual: Option<&Value>,
+    kind: &FieldKind,
+    condition: &Value,
+    today: NaiveDate,
+) -> bool {
     let Some(op_map) = condition.as_object() else {
         return scalar_eq(actual, &normalize_arg(kind, condition, today));
     };
@@ -223,6 +280,49 @@ fn extract_f64(value: &Value) -> Option<f64> {
         .or_else(|| value.as_object()?.get("amount")?.as_f64())
 }
 
+fn field_value(entity: &Entity, field: &str) -> Value {
+    match field {
+        "created_at" => Value::String(entity.created_at.clone()),
+        "updated_at" => Value::String(entity.updated_at.clone()),
+        _ => entity.data.get(field).cloned().unwrap_or(Value::Null),
+    }
+}
+
+fn build_chart_series(block: &ViewBlock, entities: &[Entity]) -> Vec<ChartSeries> {
+    let x = block
+        .x
+        .as_deref()
+        .expect("chart x validated before shaping");
+    let y = block
+        .y
+        .as_deref()
+        .expect("chart y validated before shaping");
+    let mut series = IndexMap::<String, Vec<ChartPoint>>::new();
+
+    for entity in entities {
+        let y_value = field_value(entity, y);
+        let Some(y) = extract_f64(&y_value) else {
+            continue;
+        };
+        let name = block.series.as_deref().map_or_else(
+            || block.view.clone(),
+            |series_field| match field_value(entity, series_field) {
+                Value::String(name) => name,
+                _ => String::new(),
+            },
+        );
+        series.entry(name).or_default().push(ChartPoint {
+            x: field_value(entity, x),
+            y,
+        });
+    }
+
+    series
+        .into_iter()
+        .map(|(name, points)| ChartSeries { name, points })
+        .collect()
+}
+
 fn compute_aggregate(
     view: &str,
     expr: &str,
@@ -233,7 +333,7 @@ fn compute_aggregate(
         view: view.to_string(),
         expr: expr.to_string(),
     })?;
-    if !matches!(func, "count" | "sum" | "min" | "max") {
+    if !matches!(func, "count" | "sum" | "min" | "max" | "avg") {
         return Err(ViewError::BadAggregate {
             view: view.to_string(),
             expr: expr.to_string(),
@@ -246,7 +346,7 @@ fn compute_aggregate(
             field: field.to_string(),
         });
     }
-    if matches!(func, "sum" | "min" | "max") {
+    if matches!(func, "sum" | "min" | "max" | "avg") {
         validate_money_currency(view, field, schema, entities)?;
     }
 
@@ -260,6 +360,7 @@ fn compute_aggregate(
         )),
         "min" => Ok(numeric_extreme(field, entities, f64::min)),
         "max" => Ok(numeric_extreme(field, entities, f64::max)),
+        "avg" => Ok(numeric_mean(field, entities)),
         _ => unreachable!("aggregate function validated before field lookup"),
     }
 }
@@ -325,6 +426,18 @@ fn numeric_extreme(field: &str, entities: &[Entity], combine: impl Fn(f64, f64) 
         })
         .map(Value::from)
         .unwrap_or(Value::Null)
+}
+
+fn numeric_mean(field: &str, entities: &[Entity]) -> Value {
+    let values: Vec<f64> = entities
+        .iter()
+        .filter_map(|entity| entity.data.get(field).and_then(extract_f64))
+        .collect();
+    if values.is_empty() {
+        Value::Null
+    } else {
+        Value::from(values.iter().sum::<f64>() / values.len() as f64)
+    }
 }
 
 /// 엔티티 슬라이스를 `sort` 스펙(`-` 접두사는 내림차순)에 따라 정렬한다.
@@ -428,6 +541,7 @@ mod tests {
     use super::*;
     use crate::entity::EntityStore;
     use crate::schema::SchemaSet;
+    use crate::view::ChartType;
     use serde_json::{json, Map, Value};
 
     fn schemas() -> SchemaSet {
@@ -451,6 +565,43 @@ mod tests {
         store.create(s, "물건", obj(json!({ "이름": "A", "상태": "주문됨", "가격": {"amount": 300000.0, "currency": "KRW"}, "배송예정일": "2026-07-10" }))).await.unwrap();
         store.create(s, "물건", obj(json!({ "이름": "B", "상태": "위시", "가격": {"amount": 100000.0, "currency": "KRW"}, "배송예정일": "2026-08-01" }))).await.unwrap();
         store.create(s, "시계", obj(json!({ "이름": "C", "상태": "주문됨", "가격": {"amount": 650000.0, "currency": "KRW"}, "배송예정일": "2026-07-20" }))).await.unwrap();
+    }
+
+    fn measure_schemas() -> SchemaSet {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("측정.yaml"),
+            "type: 측정\nfields:\n  지표: { kind: enum, options: [체중, 수면시간] }\n  값: { kind: number, required: true }\n  시각: { kind: date }\n",
+        )
+        .unwrap();
+        SchemaSet::load_dir(dir.path()).unwrap()
+    }
+
+    async fn seed_measure(store: &EntityStore, s: &SchemaSet) {
+        store
+            .create(
+                s,
+                "측정",
+                obj(json!({ "지표": "체중", "값": 82.0, "시각": "2026-07-01" })),
+            )
+            .await
+            .unwrap();
+        store
+            .create(
+                s,
+                "측정",
+                obj(json!({ "지표": "체중", "값": 81.0, "시각": "2026-07-05" })),
+            )
+            .await
+            .unwrap();
+        store
+            .create(
+                s,
+                "측정",
+                obj(json!({ "지표": "수면시간", "값": 6.5, "시각": "2026-07-05" })),
+            )
+            .await
+            .unwrap();
     }
 
     fn block(yaml: &str) -> crate::view::ViewBlock {
@@ -587,6 +738,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn avg_집계_평균과_빈집합() {
+        let s = schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        seed(&store, &s).await;
+
+        let r = run_view(
+            &store,
+            &s,
+            &block("view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\naggregate: { 평균가: avg(가격) }\n"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.aggregates["평균가"], json!(475000.0));
+
+        let empty = run_view(
+            &store,
+            &s,
+            &block(
+                "view: v\nsource: 물건\nfilter: { 상태: 과거 }\naggregate: { 평균: avg(가격) }\n",
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(empty.aggregates["평균"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn chart_셰이핑_지표별_계열() {
+        let s = measure_schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        seed_measure(&store, &s).await;
+
+        let r = run_view(
+            &store,
+            &s,
+            &block("view: 추세\nsource: 측정\nlayout: chart\nx: 시각\ny: 값\nseries: 지표\nsort: 시각\n"),
+        )
+        .await
+        .unwrap();
+
+        let chart = r.chart.as_ref().unwrap();
+        assert_eq!(chart.len(), 2);
+        assert_eq!(chart[0].name, "체중");
+        assert_eq!(chart[0].points.len(), 2);
+        assert_eq!(chart[0].points[0].x, json!("2026-07-01"));
+        assert_eq!(chart[0].points[0].y, 82.0);
+        assert_eq!(chart[1].name, "수면시간");
+        assert_eq!(chart[1].points.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn chart_type은_실행_결과에_전달된다() {
+        let s = measure_schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        seed_measure(&store, &s).await;
+
+        let r = run_view(
+            &store,
+            &s,
+            &block("view: 추세\nsource: 측정\nlayout: chart\nchart_type: bar\nx: 시각\ny: 값\n"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.chart_type, Some(ChartType::Bar));
+        assert_eq!(
+            serde_json::to_value(&r).unwrap()["chart_type"],
+            json!("bar")
+        );
+
+        let table = run_view(&store, &s, &block("view: 표\nsource: 측정\n"))
+            .await
+            .unwrap();
+        assert_eq!(table.chart_type, None);
+        assert!(serde_json::to_value(&table)
+            .unwrap()
+            .get("chart_type")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn chart_x축_없으면_에러() {
+        let s = measure_schemas();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        let err = run_view(
+            &store,
+            &s,
+            &block("view: 추세\nsource: 측정\nlayout: chart\ny: 값\n"),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(&err, ViewError::MissingChartAxis { axis: "x", .. }),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn count는_필드_존재가_아닌_매칭_행_수를_센다() {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
@@ -666,7 +915,9 @@ mod tests {
             .await
             .unwrap();
 
-        let b = block("view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\naggregate: { 합계: sum(가격) }\n");
+        let b = block(
+            "view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\naggregate: { 합계: sum(가격) }\n",
+        );
         let err = run_view(&store, &s, &b).await.unwrap_err();
         assert!(
             matches!(&err, ViewError::CurrencyMismatch { field, .. } if field == "가격"),
@@ -764,15 +1015,29 @@ mod tests {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
         seed(&store, &s).await; // 배송예정일: A=07-10, B=08-01, C=07-20
-        let r = run_view_at(&store, &s,
+        let r = run_view_at(
+            &store,
+            &s,
             &block("view: v\nsource: 물건\nfilter: { 배송예정일: { lte: $today+7d } }\n"),
-            d("2026-07-03")).await.unwrap();
-        let names: Vec<&str> = r.entities.iter().map(|e| e.data["이름"].as_str().unwrap()).collect();
+            d("2026-07-03"),
+        )
+        .await
+        .unwrap();
+        let names: Vec<&str> = r
+            .entities
+            .iter()
+            .map(|e| e.data["이름"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["A"]); // 07-10 ≤ 07-10
 
-        let r = run_view_at(&store, &s,
+        let r = run_view_at(
+            &store,
+            &s,
             &block("view: v\nsource: 물건\nfilter: { 배송예정일: { gte: $today } }\n"),
-            d("2026-07-21")).await.unwrap();
+            d("2026-07-21"),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.entities.len(), 1); // B(08-01)만
     }
 
@@ -780,17 +1045,31 @@ mod tests {
     async fn today_토큰을_비date_필드에_쓰면_에러() {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
-        let err = run_view_at(&store, &s,
+        let err = run_view_at(
+            &store,
+            &s,
             &block("view: v\nsource: 물건\nfilter: { 이름: { lte: $today } }\n"),
-            d("2026-07-03")).await.unwrap_err();
+            d("2026-07-03"),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("$today"));
     }
 
     #[test]
     fn 토큰_해석() {
-        assert_eq!(resolve_today_token("$today", d("2026-07-03")).unwrap(), "2026-07-03");
-        assert_eq!(resolve_today_token("$today+7d", d("2026-07-03")).unwrap(), "2026-07-10");
-        assert_eq!(resolve_today_token("$today-3d", d("2026-07-03")).unwrap(), "2026-06-30");
+        assert_eq!(
+            resolve_today_token("$today", d("2026-07-03")).unwrap(),
+            "2026-07-03"
+        );
+        assert_eq!(
+            resolve_today_token("$today+7d", d("2026-07-03")).unwrap(),
+            "2026-07-10"
+        );
+        assert_eq!(
+            resolve_today_token("$today-3d", d("2026-07-03")).unwrap(),
+            "2026-06-30"
+        );
         assert!(resolve_today_token("$today+7", d("2026-07-03")).is_none()); // d 누락
         assert!(resolve_today_token("어제", d("2026-07-03")).is_none());
     }
@@ -800,8 +1079,19 @@ mod tests {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
         seed(&store, &s).await;
-        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nsort: -가격\nlimit: 2\n"), d("2026-07-03")).await.unwrap();
-        let names: Vec<&str> = r.entities.iter().map(|e| e.data["이름"].as_str().unwrap()).collect();
+        let r = run_view_at(
+            &store,
+            &s,
+            &block("view: v\nsource: 물건\nsort: -가격\nlimit: 2\n"),
+            d("2026-07-03"),
+        )
+        .await
+        .unwrap();
+        let names: Vec<&str> = r
+            .entities
+            .iter()
+            .map(|e| e.data["이름"].as_str().unwrap())
+            .collect();
         assert_eq!(names, ["C", "A"]);
     }
 
@@ -809,10 +1099,26 @@ mod tests {
     async fn 시스템컬럼_updated_at_정렬() {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
-        let a = store.create(&s, "물건", obj(json!({ "이름": "먼저" }))).await.unwrap();
-        store.create(&s, "물건", obj(json!({ "이름": "나중" }))).await.unwrap();
-        store.update(&s, &a.id, obj(json!({ "이름": "먼저(수정)" }))).await.unwrap(); // 먼저를 최신으로
-        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nsort: \"-updated_at\"\n"), d("2026-07-03")).await.unwrap();
+        let a = store
+            .create(&s, "물건", obj(json!({ "이름": "먼저" })))
+            .await
+            .unwrap();
+        store
+            .create(&s, "물건", obj(json!({ "이름": "나중" })))
+            .await
+            .unwrap();
+        store
+            .update(&s, &a.id, obj(json!({ "이름": "먼저(수정)" })))
+            .await
+            .unwrap(); // 먼저를 최신으로
+        let r = run_view_at(
+            &store,
+            &s,
+            &block("view: v\nsource: 물건\nsort: \"-updated_at\"\n"),
+            d("2026-07-03"),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.entities[0].data["이름"], json!("먼저(수정)"));
     }
 
@@ -820,7 +1126,14 @@ mod tests {
     async fn viewresult는_source_filter_sort를_에코한다() {
         let s = schemas();
         let store = EntityStore::open_in_memory().await.unwrap();
-        let r = run_view_at(&store, &s, &block("view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\nsort: 배송예정일\n"), d("2026-07-03")).await.unwrap();
+        let r = run_view_at(
+            &store,
+            &s,
+            &block("view: v\nsource: 물건\nfilter: { 상태: 주문됨 }\nsort: 배송예정일\n"),
+            d("2026-07-03"),
+        )
+        .await
+        .unwrap();
         assert_eq!(r.source, "물건");
         assert_eq!(r.sort.as_deref(), Some("배송예정일"));
         assert_eq!(r.filter.as_ref().unwrap()["상태"], json!("주문됨"));

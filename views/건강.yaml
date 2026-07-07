@@ -1,0 +1,16 @@
+page: 건강
+blocks:
+  - view: 빠른 기록
+    source: 측정
+    layout: record
+  - view: 체중 추세
+    source: 측정
+    filter: { 지표: 체중 }
+    sort: 시각
+    layout: chart
+    x: 시각
+    y: 값
+  - view: 최근 7일 평균 수면
+    source: 측정
+    filter: { 지표: 수면시간, 시각: { gte: $today-7d } }
+    aggregate: { 평균수면: avg(값) }

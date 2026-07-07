@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/svelte";
 import PageRenderer from "./PageRenderer.svelte";
-import type { PageBlock } from "./api";
+import type { ChartSeries, PageBlock } from "./api";
 import type { SchemaMap } from "./types";
 
 const schemas: SchemaMap = {
@@ -13,7 +13,26 @@ const schemas: SchemaMap = {
       가격: { kind: "money", required: false },
     },
   },
+  측정: {
+    name: "측정",
+    extends: null,
+    fields: {
+      지표: { kind: "enum", required: true, options: ["체중", "수면시간"] },
+      값: { kind: "number", required: true },
+      시각: { kind: "date", required: true },
+    },
+  },
 };
+
+const chart: ChartSeries[] = [
+  {
+    name: "체중",
+    points: [
+      { x: "2026-07-01", y: 52.1 },
+      { x: "2026-07-02", y: 52.4 },
+    ],
+  },
+];
 
 describe("PageRenderer", () => {
   it("layout이 card면 카드 레이아웃을 렌더링한다 (table 아님)", () => {
@@ -66,5 +85,77 @@ describe("PageRenderer", () => {
     expect(decodeURIComponent(href)).toContain("상태=주문됨");
     expect(decodeURIComponent(href)).toContain("배송예정일=lte:$today+7d");
     expect(decodeURIComponent(href)).toContain("sort=배송예정일");
+  });
+
+  it("chart layout은 Chart 위젯에 chart 데이터를 line 기본값으로 렌더링한다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "추세",
+        source: "측정",
+        layout: "chart",
+        entities: [],
+        aggregates: {},
+        chart,
+        chart_type: null,
+      },
+    ];
+    const { container, getByText } = render(PageRenderer, { page: "홈", blocks, schemas });
+
+    expect(container.querySelector("svg[aria-label='chart']")).toBeInTheDocument();
+    expect(container.querySelectorAll("svg path.series")).toHaveLength(1);
+    expect(container.querySelectorAll("svg rect.bar")).toHaveLength(0);
+    expect(getByText("체중")).toBeInTheDocument();
+  });
+
+  it("chart layout은 chart_type이 bar일 때만 bar 차트로 렌더링한다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "막대",
+        source: "측정",
+        layout: "chart",
+        entities: [],
+        aggregates: {},
+        chart,
+        chart_type: "bar",
+      },
+    ];
+    const { container } = render(PageRenderer, { page: "홈", blocks, schemas });
+
+    expect(container.querySelectorAll("svg rect.bar")).toHaveLength(2);
+    expect(container.querySelectorAll("svg path.series")).toHaveLength(0);
+  });
+
+  it("chart layout은 chart 데이터가 없어도 빈 차트로 렌더링한다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "빈 차트",
+        source: "측정",
+        layout: "chart",
+        entities: [],
+        aggregates: {},
+      },
+    ];
+    const { container } = render(PageRenderer, { page: "홈", blocks, schemas });
+
+    expect(container.querySelector("svg[aria-label='chart']")).toBeInTheDocument();
+    expect(container.querySelectorAll(".legend-item")).toHaveLength(0);
+  });
+
+  it("record layout은 QuickRecordWidget에 block과 schemas를 전달해 렌더링한다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "빠른 기록",
+        source: "측정",
+        layout: "record",
+        entities: [],
+        aggregates: {},
+      },
+    ];
+    render(PageRenderer, { page: "홈", blocks, schemas });
+
+    expect(screen.getByLabelText("지표")).toBeInTheDocument();
+    expect(screen.getByLabelText("값")).toBeInTheDocument();
+    expect(screen.getByLabelText("시각")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "기록" })).toBeInTheDocument();
   });
 });

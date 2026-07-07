@@ -78,6 +78,10 @@ pub enum ViewError {
         field: String,
         token: String,
     },
+    MissingChartAxis {
+        view: String,
+        axis: &'static str,
+    },
     Io(std::io::Error),
     Parse {
         file: String,
@@ -113,6 +117,9 @@ impl std::fmt::Display for ViewError {
                 f,
                 "뷰 '{view}' 필드 '{field}': 날짜 토큰 '{token}'은 date 필드에서만, $today[±Nd] 형식만 지원"
             ),
+            ViewError::MissingChartAxis { view, axis } => {
+                write!(f, "뷰 '{view}': chart 레이아웃은 '{axis}' 필드를 요구함")
+            }
             ViewError::Io(source) => write!(f, "페이지 디렉터리 로드 실패: {source}"),
             ViewError::Parse { file, source } => {
                 write!(f, "{file}: 페이지 YAML 파싱 실패: {source}")
@@ -139,6 +146,7 @@ impl std::error::Error for ViewError {
             | ViewError::BadAggregate { .. }
             | ViewError::CurrencyMismatch { .. }
             | ViewError::BadDateToken { .. }
+            | ViewError::MissingChartAxis { .. }
             | ViewError::DuplicatePage { .. } => None,
         }
     }

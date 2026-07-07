@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ApiError, createEntity, getSchemas, listEntities, updateEntity } from "./api";
+import { ApiError, createEntity, getPage, getSchemas, listEntities, updateEntity } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn().mockResolvedValue({
@@ -45,6 +45,29 @@ describe("api", () => {
     const res = await getSchemas();
     expect(res.types["노트"].name).toBe("노트");
     expect(res.categories[0].name).toBe("메모");
+  });
+
+  it("getPage가 chart 계열을 파싱한다", async () => {
+    vi.stubGlobal("fetch", mockFetch(200, {
+      page: "건강",
+      blocks: [{
+        view: "체중 추세",
+        source: "측정",
+        layout: "chart",
+        x: "시각",
+        y: "값",
+        chart_type: "bar",
+        entities: [],
+        aggregates: {},
+        chart: [{ name: "체중", points: [{ x: "2026-07-01", y: 82 }] }],
+      }],
+    }));
+
+    const res = await getPage("건강");
+    expect(res.blocks[0].layout).toBe("chart");
+    expect(res.blocks[0].chart_type).toBe("bar");
+    expect(res.blocks[0].chart?.[0].name).toBe("체중");
+    expect(res.blocks[0].chart?.[0].points[0].y).toBe(82);
   });
 
   it("updateEntity는 spawned를 그대로 전달한다", async () => {
