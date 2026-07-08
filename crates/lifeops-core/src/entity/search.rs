@@ -1,5 +1,10 @@
+use crate::entity::store::row_to_entity;
 use crate::entity::Entity;
+use crate::entity::EntityStore;
+use crate::error::CoreError;
 use crate::schema::{FieldKind, ResolvedSchema};
+use crate::schema::SchemaSet;
+use serde::Serialize;
 use serde_json::Value;
 
 /// richtext(HTML) → 검색용 평문. 태그 제거 + 흔한 엔티티 디코드 + 공백 축약.
@@ -99,6 +104,145 @@ pub fn build_snippet(text: &str, token: &str) -> (String, usize, usize) {
         snippet.push('…');
     }
     (snippet, start, needle.len())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchSpan {
+    pub start: usize,
+    pub len: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    pub category: Option<String>,
+    pub label: String,
+    pub field: String,
+    pub snippet: String,
+    #[serde(rename = "match")]
+    pub match_span: MatchSpan,
+    pub singleton: bool,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchResults {
+    pub query: String,
+    pub results: Vec<SearchHit>,
+    pub total: usize,
+    pub truncated: bool,
+}
+
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+impl EntityStore {
+    pub async fn search(
+        &self,
+        schemas: &SchemaSet,
+        query: &str,
+        limit: usize,
+    ) -> Result<SearchResults, CoreError> {
+        let tokens: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
+        if tokens.is_empty() {
+            return Ok(SearchResults { query: query.to_string(), results: Vec::new(), total: 0, truncated: false });
+        }
+
+        let clause = vec!["data LIKE ? ESCAPE '\\'"; tokens.len()].join(" AND ");
+        let sql = format!("SELECT id, type, data, created_at, updated_at FROM entities WHERE {clause}");
+        let mut q = sqlx::query(&sql);
+        for t in &tokens {
+            q = q.bind(format!("%{}%", like_escape(t)));
+        }
+        let rows = q.fetch_all(self.pool()).await?;
+
+        let mut scored: Vec<(u8, String, SearchHit)> = Vec::new();
+        for entity in rows.into_iter().map(row_to_entity) {
+            let Some(schema) = schemas.get(&entity.entity_type) else {
+                continue;
+            };
+            let fields = searchable_fields(schema, &entity);
+
+            // 모든 토큰이 어느 필드든 존재해야 통과(raw JSON 키·UUID·태그 오탐 제거)
+            let all_present = tokens
+                .iter()
+                .all(|tok| fields.iter().any(|(_, text)| text.to_lowercase().contains(tok.as_str())));
+            if !all_present {
+                continue;
+            }
+
+            let label_field = schema.fields.iter().find(|(_, f)| f.kind == FieldKind::Text).map(|(n, _)| n.clone());
+            let weight_of = |fname: &str| -> u8 {
+                if fname == "타입" {
+                    return 3;
+                }
+                if label_field.as_deref() == Some(fname) {
+                    return 0;
+                }
+                match schema.fields.get(fname) {
+                    Some(f) if f.kind == FieldKind::RichText => 2,
+                    Some(_) => 1,
+                    None => 3,
+                }
+            };
+
+            // 첫 토큰이 매치된 최소 weight 필드로 스니펫 생성
+            let first = &tokens[0];
+            let best = fields
+                .iter()
+                .filter(|(_, text)| text.to_lowercase().contains(first.as_str()))
+                .min_by_key(|(fname, _)| weight_of(fname));
+            let (field, snippet, start, len, weight) = match best {
+                Some((fname, text)) => {
+                    let (snip, st, ln) = build_snippet(text, first);
+                    (fname.clone(), snip, st, ln, weight_of(fname))
+                }
+                None => ("타입".to_string(), entity.entity_type.clone(), 0usize, 0usize, 3u8),
+            };
+
+            let label = label_field
+                .as_ref()
+                .and_then(|lf| entity.data.get(lf))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| entity.id.chars().take(8).collect());
+
+            let href = if schema.singleton {
+                format!("/pages/{}", entity.entity_type)
+            } else {
+                format!("/entity/{}", entity.id)
+            };
+
+            scored.push((
+                weight,
+                entity.updated_at.clone(),
+                SearchHit {
+                    id: entity.id,
+                    entity_type: entity.entity_type,
+                    category: schema.category.clone(),
+                    label,
+                    field,
+                    snippet,
+                    match_span: MatchSpan { start, len },
+                    singleton: schema.singleton,
+                    href,
+                },
+            ));
+        }
+
+        // weight 오름차순, 동급은 updated_at 내림차순(최근 먼저)
+        scored.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+
+        let total = scored.len();
+        let truncated = total > limit;
+        let results: Vec<SearchHit> = scored.into_iter().take(limit).map(|(_, _, h)| h).collect();
+
+        Ok(SearchResults { query: query.to_string(), results, total, truncated })
+    }
 }
 
 #[cfg(test)]
@@ -234,5 +378,102 @@ mod tests {
         assert_eq!(len, 0);
         assert_eq!(start, 0);
         assert_eq!(s, "짧은 텍스트");
+    }
+
+    async fn seeded() -> (EntityStore, SchemaSet) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("시계.yaml"), "type: 시계\ncategory: 컬렉션\nfields:\n  이름: { kind: text }\n").unwrap();
+        std::fs::write(dir.path().join("노트.yaml"), "type: 노트\ncategory: 메모\nfields:\n  제목: { kind: text }\n  본문: { kind: richtext }\n").unwrap();
+        std::fs::write(dir.path().join("프로필.yaml"), "type: 프로필\ncategory: 나\nsingleton: true\nfields:\n  이름: { kind: text }\n  AI메모: { kind: richtext }\n").unwrap();
+        std::fs::write(dir.path().join("측정.yaml"), "type: 측정\ncategory: 기록\nfields:\n  항목: { kind: text }\n  값: { kind: number }\n").unwrap();
+        std::fs::write(dir.path().join("로그.yaml"), "type: 로그\ncategory: 기록\nfields:\n  기록: { kind: richtext }\n").unwrap();
+        let schemas = SchemaSet::load_dir(dir.path()).unwrap();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        (store, schemas)
+    }
+
+    async fn mk(store: &EntityStore, schemas: &SchemaSet, ty: &str, data: serde_json::Value) -> Entity {
+        store.create(schemas, ty, data.as_object().unwrap().clone()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn 여러_형태를_가로질러_검색한다() {
+        let (store, schemas) = seeded().await;
+        mk(&store, &schemas, "시계", json!({ "이름": "세이코 미쿠" })).await;
+        mk(&store, &schemas, "노트", json!({ "제목": "여름 회고", "본문": "<p>세이코를 팔았다</p>" })).await;
+        mk(&store, &schemas, "측정", json!({ "항목": "세이코 관련 지출", "값": 5 })).await;
+        mk(&store, &schemas, "프로필", json!({ "이름": "미쿠" })).await; // 세이코 없음
+
+        let res = store.search(&schemas, "세이코", 50).await.unwrap();
+        let types: std::collections::HashSet<&str> = res.results.iter().map(|h| h.entity_type.as_str()).collect();
+        assert!(types.contains("시계") && types.contains("노트") && types.contains("측정"));
+        assert!(!types.contains("프로필"));
+    }
+
+    #[tokio::test]
+    async fn 필드명은_오탐으로_잡히지_않는다() {
+        let (store, schemas) = seeded().await;
+        // "AI메모"는 프로필의 필드명. 값엔 그 문자열이 없음 → raw JSON 키로 프리필터는 통과하지만 결과엔 없어야.
+        mk(&store, &schemas, "프로필", json!({ "이름": "미쿠", "AI메모": "<p>담백한 톤</p>" })).await;
+        let res = store.search(&schemas, "AI메모", 50).await.unwrap();
+        assert_eq!(res.total, 0);
+    }
+
+    #[tokio::test]
+    #[allow(non_snake_case)] // 브리프가 지정한 테스트명의 "AND"가 대문자라 스타일 린트만 걸림
+    async fn 토큰_AND_모두_포함해야_매치() {
+        let (store, schemas) = seeded().await;
+        mk(&store, &schemas, "시계", json!({ "이름": "세이코 미쿠" })).await;
+        mk(&store, &schemas, "시계", json!({ "이름": "세이코 렌" })).await;
+        let res = store.search(&schemas, "세이코 미쿠", 50).await.unwrap();
+        assert_eq!(res.results.len(), 1);
+        assert_eq!(res.results[0].label, "세이코 미쿠");
+    }
+
+    #[tokio::test]
+    async fn 싱글턴은_페이지_href_그외는_엔티티_href() {
+        let (store, schemas) = seeded().await;
+        mk(&store, &schemas, "프로필", json!({ "이름": "미쿠타로" })).await;
+        let w = mk(&store, &schemas, "시계", json!({ "이름": "미쿠타로 시계" })).await;
+        let res = store.search(&schemas, "미쿠타로", 50).await.unwrap();
+        let prof = res.results.iter().find(|h| h.entity_type == "프로필").unwrap();
+        assert!(prof.singleton);
+        assert_eq!(prof.href, "/pages/프로필");
+        let watch = res.results.iter().find(|h| h.entity_type == "시계").unwrap();
+        assert_eq!(watch.href, format!("/entity/{}", w.id));
+    }
+
+    #[tokio::test]
+    async fn 라벨은_첫_text_필드_없으면_id폴백() {
+        let (store, schemas) = seeded().await;
+        let l = mk(&store, &schemas, "로그", json!({ "기록": "<p>세이코 로그</p>" })).await; // text 필드 없음
+        let res = store.search(&schemas, "세이코", 50).await.unwrap();
+        let hit = res.results.iter().find(|h| h.entity_type == "로그").unwrap();
+        assert_eq!(hit.label, l.id.chars().take(8).collect::<String>());
+    }
+
+    #[tokio::test]
+    async fn 랭킹은_라벨매치가_본문매치보다_앞() {
+        let (store, schemas) = seeded().await;
+        mk(&store, &schemas, "노트", json!({ "제목": "무관", "본문": "<p>세이코 언급</p>" })).await; // richtext 매치
+        mk(&store, &schemas, "시계", json!({ "이름": "세이코" })).await;                         // 라벨 매치
+        let res = store.search(&schemas, "세이코", 50).await.unwrap();
+        assert_eq!(res.results[0].entity_type, "시계");
+    }
+
+    #[tokio::test]
+    async fn 빈_쿼리와_limit_truncated() {
+        let (store, schemas) = seeded().await;
+        let empty = store.search(&schemas, "   ", 50).await.unwrap();
+        assert_eq!(empty.total, 0);
+        assert!(empty.results.is_empty());
+
+        for n in ["미쿠 A", "미쿠 B", "미쿠 C"] {
+            mk(&store, &schemas, "시계", json!({ "이름": n })).await;
+        }
+        let res = store.search(&schemas, "미쿠", 2).await.unwrap();
+        assert_eq!(res.results.len(), 2);
+        assert_eq!(res.total, 3);
+        assert!(res.truncated);
     }
 }

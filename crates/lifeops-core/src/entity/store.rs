@@ -247,6 +247,11 @@ impl EntityStore {
         Ok(rows.into_iter().map(row_to_entity).collect())
     }
 
+    /// 같은 크레이트의 검색 모듈이 읽기 쿼리에 쓰는 커넥션 풀 접근자.
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     pub async fn rename_field(
         &self,
         types: &[String],
