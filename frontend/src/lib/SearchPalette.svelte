@@ -104,7 +104,7 @@
     <div
       class="search-palette"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
+      onkeydown={(e) => { if (e.key === "Escape" || e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Enter") e.stopPropagation(); }}
       role="dialog"
       aria-label="검색"
       aria-modal="true"
