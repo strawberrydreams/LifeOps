@@ -18,6 +18,7 @@ pub struct ResolvedSchema {
     pub name: String,
     pub extends: Option<String>,
     pub category: Option<String>,
+    pub singleton: bool,
     pub behaviors: Option<RawBehaviors>,
     pub fields: IndexMap<String, ResolvedField>,
 }
@@ -88,6 +89,7 @@ impl SchemaSet {
                     name: name.clone(),
                     extends: leaf.extends.clone(),
                     category,
+                    singleton: leaf.singleton,
                     behaviors,
                     fields,
                 },
@@ -323,6 +325,19 @@ mod tests {
     fn 미지정_category는_none() {
         let set = set_from(&[("물건.yaml", 물건)]).unwrap();
         assert!(set.get("물건").unwrap().category.is_none());
+    }
+
+    #[test]
+    fn singleton은_해석에_전달되고_직렬화된다() {
+        let set = set_from(&[(
+            "프로필.yaml",
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        )])
+        .unwrap();
+        let resolved = set.get("프로필").unwrap();
+        assert!(resolved.singleton);
+        let json = serde_json::to_value(resolved).unwrap();
+        assert_eq!(json["singleton"], serde_json::json!(true));
     }
 
     #[test]

@@ -77,6 +77,34 @@ mod tests {
     }
 
     #[test]
+    fn singleton_true는_직렬화되고_false는_생략되며_왕복한다() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("프로필.yaml"),
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("물건.yaml"),
+            "type: 물건\nfields:\n  이름: { kind: text }\n",
+        )
+        .unwrap();
+        let raw = load_raw_dir(dir.path()).unwrap();
+
+        let y_profile = to_yaml(&raw["프로필"].0).unwrap();
+        assert!(
+            y_profile.contains("singleton: true"),
+            "true는 써야 함:\n{y_profile}"
+        );
+        let y_thing = to_yaml(&raw["물건"].0).unwrap();
+        assert!(!y_thing.contains("singleton"), "false는 생략:\n{y_thing}");
+
+        std::fs::write(dir.path().join("프로필.yaml"), &y_profile).unwrap();
+        let reparsed = load_raw_dir(dir.path()).unwrap();
+        assert!(reparsed["프로필"].0.singleton);
+    }
+
+    #[test]
     fn recurrence_behaviors는_직렬화하고_왕복한다() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(

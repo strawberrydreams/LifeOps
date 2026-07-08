@@ -253,6 +253,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn 싱글턴_중복_생성은_409() {
+        let (state, _dir) = test_state().await;
+        std::fs::write(
+            state.schemas_dir.join("프로필.yaml"),
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        )
+        .unwrap();
+        let app = build_app(state);
+        app.clone().oneshot(post("/api/reload", json!({}))).await.unwrap();
+
+        let first = app.clone().oneshot(post("/api/entities",
+            json!({ "type": "프로필", "data": { "이름": "미쿠" } }))).await.unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+
+        let second = app.oneshot(post("/api/entities",
+            json!({ "type": "프로필", "data": { "이름": "린" } }))).await.unwrap();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let body = body_json(second).await;
+        assert_eq!(body["error"]["code"], "singleton_exists");
+    }
+
+    #[tokio::test]
     async fn 삭제_차단은_409() {
         let (state, _dir) = test_state().await;
         let app = build_app(state);

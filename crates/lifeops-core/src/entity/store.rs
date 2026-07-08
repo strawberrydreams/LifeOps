@@ -90,6 +90,16 @@ impl EntityStore {
         };
 
         let mut tx = self.pool.begin().await?;
+        if schema.singleton {
+            let exists = sqlx::query("SELECT 1 FROM entities WHERE type = ? LIMIT 1")
+                .bind(entity_type)
+                .fetch_optional(&mut *tx)
+                .await?
+                .is_some();
+            if exists {
+                return Err(CoreError::SingletonExists(entity_type.to_string()));
+            }
+        }
         check_ref_targets(&mut tx, schemas, &edges).await?;
         sqlx::query(
             "INSERT INTO entities (id, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -506,6 +516,40 @@ mod tests {
         assert_eq!(loaded.entity_type, "시계");
         assert_eq!(loaded.data["이름"], "세이코 미쿠");
         assert_eq!(loaded.created_at, loaded.updated_at);
+    }
+
+    #[tokio::test]
+    async fn 싱글턴은_한_행만_생성되고_두번째는_에러이며_삭제후_재생성된다() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("프로필.yaml"),
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        )
+        .unwrap();
+        let schemas = SchemaSet::load_dir(dir.path()).unwrap();
+        let store = EntityStore::open_in_memory().await.unwrap();
+
+        let first = store
+            .create(&schemas, "프로필", obj(json!({ "이름": "미쿠" })))
+            .await
+            .unwrap();
+
+        let second = store
+            .create(&schemas, "프로필", obj(json!({ "이름": "린" })))
+            .await;
+        assert!(
+            matches!(&second, Err(CoreError::SingletonExists(t)) if t == "프로필"),
+            "두번째 생성은 SingletonExists: {second:?}"
+        );
+
+        store.delete(&first.id).await.unwrap();
+        assert!(
+            store
+                .create(&schemas, "프로필", obj(json!({ "이름": "렌" })))
+                .await
+                .is_ok(),
+            "삭제 후 재생성 가능해야 함"
+        );
     }
 
     #[tokio::test]

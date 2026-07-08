@@ -50,6 +50,10 @@ impl From<CoreError> for ApiError {
                     json!({ "error": { "code": "delete_blocked", "message": format!("{}곳에서 참조 중", refs.len()), "referrers": refs } }),
                 )
             }
+            CoreError::SingletonExists(t) => ApiError(
+                StatusCode::CONFLICT,
+                json!({ "error": { "code": "singleton_exists", "message": format!("싱글턴 타입 '{t}'은 하나만 만들 수 있어요") } }),
+            ),
             CoreError::Db(e) => {
                 tracing::error!("DB 오류: {e}");
                 ApiError(

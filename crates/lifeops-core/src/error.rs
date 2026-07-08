@@ -13,6 +13,8 @@ pub enum CoreError {
     DeleteBlocked {
         referrers: Vec<crate::entity::store::RefEdge>,
     },
+    #[error("싱글턴 타입 '{0}'은 이미 존재합니다 (하나만 생성 가능)")]
+    SingletonExists(String),
     #[error("DB 오류: {0}")]
     Db(#[from] sqlx::Error),
 }

@@ -31,6 +31,8 @@ pub struct SchemaInput {
     #[serde(default)]
     pub field_order: Option<Vec<String>>,
     #[serde(default)]
+    pub singleton: Option<bool>,
+    #[serde(default)]
     pub renames: IndexMap<String, String>,
 }
 
@@ -57,7 +59,7 @@ pub async fn create(
         })?
         .to_string();
     let filename = safe_filename(&name)?;
-    let raw = to_raw_schema(name.clone(), &input);
+    let raw = to_raw_schema(name.clone(), &input, false);
     apply_and_persist(&st, &name, &filename, raw).await?;
 
     Ok((StatusCode::CREATED, Json(json!({ "ok": true }))))
@@ -88,6 +90,7 @@ pub async fn get_one(
     Ok(Json(json!({
         "type": own.name,
         "category": own.category,
+        "singleton": own.singleton,
         "extends": own.extends,
         "behaviors": own.behaviors,
         "field_order": own.field_order,
@@ -123,12 +126,13 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn to_raw_schema(name: String, input: &SchemaInput) -> RawSchema {
+fn to_raw_schema(name: String, input: &SchemaInput, prior_singleton: bool) -> RawSchema {
     let _ = &input.renames;
     RawSchema {
         name,
         extends: input.extends.clone(),
         category: input.category.clone(),
+        singleton: input.singleton.unwrap_or(prior_singleton),
         behaviors: input.behaviors.clone(),
         fields: input.fields.clone(),
         field_order: input.field_order.clone(),
@@ -244,7 +248,7 @@ async fn update_schema(
     validate_immutable_update(name, &input, &existing_raw)?;
     validate_update_renames(&existing_raw, &input)?;
 
-    let raw = to_raw_schema(name.to_string(), &input);
+    let raw = to_raw_schema(name.to_string(), &input, existing_raw.singleton);
     candidates.insert(name.to_string(), (raw.clone(), existing_filename.clone()));
     let new_set = SchemaSet::from_raw(&candidates).map_err(schema_error_to_api)?;
 
@@ -650,6 +654,55 @@ mod tests {
             .uri(uri)
             .body(Body::empty())
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn 편집은_body에_없어도_singleton을_보존한다() {
+        let (state, _dir) = test_state().await;
+        std::fs::write(
+            state.schemas_dir.join("프로필.yaml"),
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        )
+        .unwrap();
+        let app = build_app(state.clone());
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reload")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let res = app
+            .clone()
+            .oneshot(put(
+                "/api/schemas/프로필",
+                json!({
+                    "type": "프로필",
+                    "fields": {
+                        "이름": { "kind": "text" },
+                        "거주지": { "kind": "text" }
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/schemas/프로필")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_json(res).await;
+        assert_eq!(body["singleton"], json!(true));
     }
 
     #[tokio::test]

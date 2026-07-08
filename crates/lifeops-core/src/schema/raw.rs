@@ -11,6 +11,8 @@ pub struct RawSchema {
     pub extends: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub singleton: bool,
     #[serde(default, skip_serializing_if = "is_empty_behaviors")]
     pub behaviors: Option<RawBehaviors>,
     #[serde(default)]
@@ -134,5 +136,23 @@ mod tests {
         write(dir.path(), "bad.yaml", "type: [broken");
         let err = load_raw_dir(dir.path()).unwrap_err();
         assert!(err.to_string().contains("bad.yaml"));
+    }
+
+    #[test]
+    fn singleton_플래그를_읽고_기본은_false() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "프로필.yaml",
+            "type: 프로필\nsingleton: true\nfields:\n  이름: { kind: text }\n",
+        );
+        write(
+            dir.path(),
+            "물건.yaml",
+            "type: 물건\nfields:\n  이름: { kind: text }\n",
+        );
+        let raw = load_raw_dir(dir.path()).unwrap();
+        assert!(raw["프로필"].0.singleton, "프로필은 singleton=true");
+        assert!(!raw["물건"].0.singleton, "물건은 기본 false");
     }
 }
