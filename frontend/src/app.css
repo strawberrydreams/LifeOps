@@ -27,6 +27,7 @@
 .sidebar .group li:hover .add {
   visibility: visible;
 }
+.sidebar .search,
 .sidebar .home {
   display: block;
   width: 100%;

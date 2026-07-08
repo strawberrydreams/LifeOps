@@ -3,6 +3,7 @@
   import { getSchemas } from "./lib/api";
   import { router } from "./lib/router.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
+  import SearchPalette from "./lib/SearchPalette.svelte";
   import Home from "./lib/pages/Home.svelte";
   import Browse from "./lib/pages/Browse.svelte";
   import Detail from "./lib/pages/Detail.svelte";
@@ -16,11 +17,21 @@
   $effect(() => {
     getSchemas().then((r) => { schemas = r.types; categories = r.categories; loaded = true; });
   });
+
+  let paletteOpen = $state(false);
+  function onWindowKey(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      paletteOpen = !paletteOpen;
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="app">
   {#if loaded}
-    <Sidebar schemas={schemas} categories={categories} onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
+    <Sidebar schemas={schemas} categories={categories} onsearch={() => (paletteOpen = true)} onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
     <main>
       {#if router.route.name === "home"}
         <Home schemas={schemas} />
@@ -38,6 +49,7 @@
         <TypeEditor schemas={schemas} categories={categories} mode="edit" type={router.route.type} onreloaded={(r) => { schemas = r.types; categories = r.categories; }} />
       {/if}
     </main>
+    <SearchPalette open={paletteOpen} schemas={schemas} categories={categories} onclose={() => (paletteOpen = false)} />
   {:else}
     <p>불러오는 중…</p>
   {/if}
