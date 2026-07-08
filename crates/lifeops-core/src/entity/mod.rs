@@ -1,4 +1,5 @@
 pub mod recurrence;
+pub mod search;
 pub mod store;
 pub mod validate;
 pub use store::{Entity, EntityStore, RefEdge};
