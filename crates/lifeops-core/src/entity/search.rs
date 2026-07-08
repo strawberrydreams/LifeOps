@@ -218,4 +218,21 @@ mod tests {
         assert!(s.ends_with('…'));
         assert_eq!(s.chars().skip(start).take(len).collect::<String>(), "세이코");
     }
+
+    #[test]
+    fn build_snippet_대소문자_무시_매치() {
+        // 소문자 토큰이 혼합 대소문자 원문과 매치되고, 오프셋은 원문(원래 대소문자)을 가리킨다.
+        let (s, start, len) = build_snippet("My Seiko Watch", "seiko");
+        assert_eq!(len, 5);
+        assert_eq!(s.chars().skip(start).take(len).collect::<String>(), "Seiko");
+    }
+
+    #[test]
+    fn build_snippet_무매치는_앞부분과_0오프셋() {
+        // 매치가 없으면 앞 60자 이내를 그대로 반환하고 (start, len)=(0, 0).
+        let (s, start, len) = build_snippet("짧은 텍스트", "없는토큰");
+        assert_eq!(len, 0);
+        assert_eq!(start, 0);
+        assert_eq!(s, "짧은 텍스트");
+    }
 }
