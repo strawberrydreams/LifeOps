@@ -183,7 +183,12 @@ impl EntityStore {
                     return 0;
                 }
                 match schema.fields.get(fname) {
-                    Some(f) if f.kind == FieldKind::RichText => 2,
+                    Some(f)
+                        if f.kind == FieldKind::RichText
+                            || matches!(&f.kind, FieldKind::List(inner) if **inner == FieldKind::RichText) =>
+                    {
+                        2
+                    }
                     Some(_) => 1,
                     None => 3,
                 }
@@ -420,8 +425,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(non_snake_case)] // 브리프가 지정한 테스트명의 "AND"가 대문자라 스타일 린트만 걸림
-    async fn 토큰_AND_모두_포함해야_매치() {
+    async fn 토큰_and_모두_포함해야_매치() {
         let (store, schemas) = seeded().await;
         mk(&store, &schemas, "시계", json!({ "이름": "세이코 미쿠" })).await;
         mk(&store, &schemas, "시계", json!({ "이름": "세이코 렌" })).await;
@@ -475,5 +479,49 @@ mod tests {
         assert_eq!(res.results.len(), 2);
         assert_eq!(res.total, 3);
         assert!(res.truncated);
+    }
+
+    #[test]
+    fn like_escape_이스케이프문자_먼저_그다음_와일드카드() {
+        // 이스케이프 문자(\)를 먼저 두 배로 만든 뒤 %, _ 와일드카드를 이스케이프해야 한다.
+        assert_eq!(like_escape("a%b_c\\d"), "a\\%b\\_c\\\\d");
+    }
+
+    #[tokio::test]
+    async fn 랭킹은_list_richtext를_tier2로_본다() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("문서.yaml"),
+            "type: 문서\ncategory: 자료\nfields:\n  제목: { kind: text }\n  비고: { kind: text }\n  메모들: { kind: \"list<richtext>\" }\n",
+        )
+        .unwrap();
+        let schemas = SchemaSet::load_dir(dir.path()).unwrap();
+        let store = EntityStore::open_in_memory().await.unwrap();
+
+        // B를 먼저 만든다. list<richtext>를 tier2로 보정하지 않으면 둘 다 tier1이 되고,
+        // 같은 초 타임스탬프에서 안정 정렬이 삽입 순서(B 먼저)를 유지 → B가 앞서 랭킹이 뒤집힌다.
+        // 보정 후 B의 메모들 매치는 tier2가 되어 A(비고=tier1)가 확실히 앞선다.
+        let b = mk(
+            &store,
+            &schemas,
+            "문서",
+            json!({ "제목": "무관제목B", "비고": "관계없음", "메모들": ["<p>핵심어 등장</p>"] }),
+        )
+        .await;
+        let a = mk(
+            &store,
+            &schemas,
+            "문서",
+            json!({ "제목": "무관제목A", "비고": "핵심어 포함", "메모들": ["<p>다른내용</p>"] }),
+        )
+        .await;
+
+        let res = store.search(&schemas, "핵심어", 50).await.unwrap();
+        let ia = res.results.iter().position(|h| h.id == a.id).unwrap();
+        let ib = res.results.iter().position(|h| h.id == b.id).unwrap();
+        assert!(
+            ia < ib,
+            "일반 text(tier1) 매치가 list<richtext>(tier2) 매치보다 앞서야 한다: A={ia}, B={ib}"
+        );
     }
 }
