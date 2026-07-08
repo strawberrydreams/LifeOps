@@ -151,11 +151,15 @@ impl EntityStore {
             return Ok(SearchResults { query: query.to_string(), results: Vec::new(), total: 0, truncated: false });
         }
 
-        let clause = vec!["data LIKE ? ESCAPE '\\'"; tokens.len()].join(" AND ");
+        // 타입명은 별도 컬럼(data JSON 밖)이므로 프리필터에서 type도 훑어야 타입명 검색이 산다.
+        // 토큰별로 data 또는 type에 있으면 후보(토큰 AND 유지). 오탐은 아래 all_present가 제거.
+        let clause =
+            vec!["(data LIKE ? ESCAPE '\\' OR type LIKE ? ESCAPE '\\')"; tokens.len()].join(" AND ");
         let sql = format!("SELECT id, type, data, created_at, updated_at FROM entities WHERE {clause}");
         let mut q = sqlx::query(&sql);
         for t in &tokens {
-            q = q.bind(format!("%{}%", like_escape(t)));
+            let pat = format!("%{}%", like_escape(t));
+            q = q.bind(pat.clone()).bind(pat);
         }
         let rows = q.fetch_all(self.pool()).await?;
 
@@ -413,6 +417,18 @@ mod tests {
         let types: std::collections::HashSet<&str> = res.results.iter().map(|h| h.entity_type.as_str()).collect();
         assert!(types.contains("시계") && types.contains("노트") && types.contains("측정"));
         assert!(!types.contains("프로필"));
+    }
+
+    #[tokio::test]
+    async fn 타입명으로도_검색된다() {
+        let (store, schemas) = seeded().await;
+        // data엔 "시계" 부분문자열이 없지만 타입명이 "시계" → 타입명 매치로 잡혀야(스펙 검색범위: 타입명 포함).
+        mk(&store, &schemas, "시계", json!({ "이름": "세이코" })).await;
+        mk(&store, &schemas, "노트", json!({ "제목": "무관", "본문": "<p>다른 내용</p>" })).await;
+        let res = store.search(&schemas, "시계", 50).await.unwrap();
+        assert_eq!(res.total, 1);
+        assert_eq!(res.results[0].entity_type, "시계");
+        assert_eq!(res.results[0].field, "타입");
     }
 
     #[tokio::test]
