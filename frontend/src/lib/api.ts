@@ -153,3 +153,28 @@ export function updateSchema(
 export function deleteSchema(type: string): Promise<void> {
   return request("DELETE", `/api/schemas/${encodeURIComponent(type)}`);
 }
+
+export interface SearchHit {
+  id: string;
+  type: string;
+  category: string | null;
+  label: string;
+  field: string;
+  snippet: string;
+  match: { start: number; len: number };
+  singleton: boolean;
+  href: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchHit[];
+  total: number;
+  truncated: boolean;
+}
+
+export function search(q: string, limit?: number): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q });
+  if (limit !== undefined) params.set("limit", String(limit));
+  return request("GET", `/api/search?${params.toString()}`);
+}

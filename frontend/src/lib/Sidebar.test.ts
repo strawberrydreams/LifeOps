@@ -47,4 +47,16 @@ describe("Sidebar", () => {
 
     expect(navigate).toHaveBeenCalledWith("/pages/%ED%94%84%EB%A1%9C%ED%95%84");
   });
+
+  it("검색 버튼이 onsearch를 호출한다", async () => {
+    const onsearch = vi.fn();
+    render(Sidebar, {
+      schemas: { 시계: { name: "시계", fields: {} } } as any,
+      categories: [{ name: "컬렉션" }],
+      onreloaded: vi.fn(),
+      onsearch,
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "🔍 검색" }));
+    expect(onsearch).toHaveBeenCalled();
+  });
 });

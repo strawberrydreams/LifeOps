@@ -1,4 +1,4 @@
-use crate::routes::{entities, misc, schemas};
+use crate::routes::{entities, misc, schemas, search};
 use crate::state::AppState;
 use crate::static_files::spa_fallback;
 use axum::routing::{delete, get, post, put};
@@ -24,6 +24,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route("/api/pages/{name}", get(misc::page))
         .route("/api/export", get(misc::export))
+        .route("/api/search", get(search::search))
         .route("/api/reload", post(misc::reload));
 
     Router::new()

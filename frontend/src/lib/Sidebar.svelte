@@ -3,10 +3,11 @@
   import { navigate } from "./router.svelte";
   import { reload, getSchemas } from "./api";
 
-  let { schemas, categories, onreloaded }: {
+  let { schemas, categories, onreloaded, onsearch = () => {} }: {
     schemas: SchemaMap;
     categories: Category[];
     onreloaded: (r: SchemasResponse) => void;
+    onsearch?: () => void;
   } = $props();
 
   let collapsed = $state<Record<string, boolean>>({});
@@ -37,6 +38,7 @@
 
 <nav class="sidebar">
   <h1>LifeOps</h1>
+  <button type="button" class="search" onclick={onsearch}>🔍 검색</button>
   <button type="button" class="home" onclick={() => navigate("/")}>🏠 홈</button>
   {#each groups as g (g.cat.name)}
     <div class="group">

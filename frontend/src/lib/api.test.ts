@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ApiError, createEntity, getPage, getSchemas, listEntities, updateEntity } from "./api";
+import { ApiError, createEntity, getPage, getSchemas, listEntities, search, updateEntity } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn().mockResolvedValue({
@@ -107,5 +107,15 @@ describe("api", () => {
       "/api/schemas",
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("search는 q와 limit을 쿼리스트링으로 보낸다", async () => {
+    const f = mockFetch(200, { query: "세이코", results: [], total: 0, truncated: false });
+    vi.stubGlobal("fetch", f);
+    await search("세이코", 30);
+    const url = f.mock.calls[0][0] as string;
+    expect(url).toContain("/api/search?");
+    expect(decodeURIComponent(url)).toContain("q=세이코");
+    expect(url).toContain("limit=30");
   });
 });

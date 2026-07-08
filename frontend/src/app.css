@@ -1,6 +1,10 @@
 /* 전역 스타일. 테스트에서 컴포넌트 <style> 전처리 문제를 피하려고
    사이드바 등 공통 스타일은 여기 전역으로 둔다(컴포넌트는 클래스만 부여). */
 
+/* App layout — App.svelte의 <style>에서 이관. 의도적으로 전역(App은 클래스만 부여). */
+.app { display: flex; gap: 1rem; }
+main { flex: 1; }
+
 /* Sidebar */
 .sidebar .group-header {
   width: 100%;
@@ -27,6 +31,7 @@
 .sidebar .group li:hover .add {
   visibility: visible;
 }
+.sidebar .search,
 .sidebar .home {
   display: block;
   width: 100%;
@@ -125,3 +130,18 @@
 .badge.overdue { background: #fdd; color: #a00; }
 .badge.due-today { background: #ffe9b3; }
 .chip { font-size: 0.8rem; border: 1px solid #ccc; border-radius: 1rem; padding: 0.05rem 0.5rem; background: #fafafa; cursor: pointer; }
+
+/* SearchPalette */
+.search-palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; z-index: 100; }
+.search-palette { background: #fff; width: min(640px, 92vw); max-height: 70vh; overflow-y: auto; border-radius: 8px; padding: 0.75rem; box-shadow: 0 8px 40px rgba(0,0,0,0.25); }
+.search-palette input { width: 100%; font-size: 1.1rem; padding: 0.5rem; box-sizing: border-box; }
+.search-palette .group-title { font-size: 0.8rem; opacity: 0.7; margin: 0.5rem 0 0.25rem; }
+.search-palette ul { list-style: none; margin: 0; padding: 0; }
+.search-palette li button { display: block; width: 100%; text-align: left; padding: 0.4rem 0.5rem; border: none; background: none; cursor: pointer; border-radius: 4px; }
+.search-palette li button.selected, .search-palette li button:hover { background: rgba(0,0,0,0.06); }
+.search-palette .type { font-size: 0.7rem; opacity: 0.6; margin-right: 0.4rem; }
+.search-palette .label { font-weight: 600; }
+.search-palette .snippet { display: block; font-size: 0.85rem; opacity: 0.8; }
+.search-palette mark { background: #ffe58f; }
+.search-palette .empty { opacity: 0.6; padding: 0.5rem; }
+.search-palette .more { margin-top: 0.5rem; }
