@@ -241,6 +241,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_값편집은_meta를_자동스탬프하고_메타만편집은_병합된다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app(state);
+
+        let res = app.clone().oneshot(post("/api/entities",
+            json!({ "type": "시계", "data": { "이름": "세이코" } }))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let created = body_json(res).await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        // 값 편집 → $meta.이름 자동 스탬프
+        let res = app.clone().oneshot(
+            Request::builder().method("PATCH").uri(format!("/api/entities/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "이름": "세이코 미쿠" }).to_string())).unwrap()
+        ).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+        assert_eq!(body["data"]["$meta"]["이름"]["source"], "manual");
+        assert!(body["data"]["$meta"]["이름"]["updatedAt"].is_string());
+
+        let res = app.clone().oneshot(post("/api/entities",
+            json!({
+                "type": "시계",
+                "data": {
+                    "이름": "카시오",
+                    "$meta": {
+                        "이름": {
+                            "source": "manual",
+                            "updatedAt": "2000-01-01T00:00:00Z"
+                        }
+                    }
+                }
+            }))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let created = body_json(res).await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        // 메타만 편집(sensitivity) → 병합, source 보존
+        let res = app.oneshot(
+            Request::builder().method("PATCH").uri(format!("/api/entities/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "$meta": { "이름": { "sensitivity": "sensitive" } } }).to_string())).unwrap()
+        ).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+        assert_eq!(body["data"]["$meta"]["이름"]["sensitivity"], "sensitive");
+        assert_eq!(body["data"]["$meta"]["이름"]["source"], "manual");
+        assert_eq!(
+            body["data"]["$meta"]["이름"]["updatedAt"].as_str().unwrap(),
+            "2000-01-01T00:00:00Z"
+        );
+    }
+
+    #[tokio::test]
     async fn 검증_실패는_400_필드에러() {
         let (state, _dir) = test_state().await;
         let app = build_app(state);

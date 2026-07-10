@@ -52,12 +52,29 @@ describe("ProfileView", () => {
     render(ProfileView, { block: block([entity({ 이름: "하츠네", 상태: "휴식" })]), schemas });
 
     expect(screen.getByText("기본")).toBeInTheDocument();
-    const nameInput = screen.getByLabelText("이름");
+    const nameInput = screen.getByRole("textbox", { name: "이름" });
     expect(nameInput).toHaveValue("하츠네");
+    expect(screen.queryByRole("textbox", { name: /출처 정보/ })).not.toBeInTheDocument();
 
     await fireEvent.input(nameInput, { target: { value: "미쿠" } });
     await fireEvent.click(screen.getByRole("button", { name: "저장" }));
 
     expect(api.updateEntity).toHaveBeenCalledWith("p1", expect.objectContaining({ 이름: "미쿠" }));
+  });
+
+  it("각 프로필 필드에 프로비넌스 트리거를 렌더한다", () => {
+    render(ProfileView, { block: block([entity({ 이름: "미쿠", 상태: "활동" })]), schemas });
+
+    expect(screen.getAllByLabelText("출처 정보")).toHaveLength(2);
+  });
+
+  it("여러 프로필 뷰를 함께 렌더해도 필드 라벨 id가 중복되지 않는다", () => {
+    render(ProfileView, { block: block([entity({ 이름: "미쿠", 상태: "활동" })]), schemas });
+    render(ProfileView, { block: block([entity({ 이름: "루카", 상태: "휴식" })]), schemas });
+
+    const ids = Array.from(document.querySelectorAll<HTMLElement>("[id^='profile-field-label-']")).map((el) => el.id);
+
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -26,6 +26,10 @@
     const q = params.toString();
     return `/browse/${encodeURIComponent(block.source)}${q ? `?${q}` : ""}`;
   }
+
+  function cardColumns(data: Record<string, unknown>, columns?: string[] | null): string[] {
+    return columns ?? Object.keys(data).filter((key) => !key.startsWith("$"));
+  }
 </script>
 
 <div class="page">
@@ -54,8 +58,8 @@
         <div class="cards">
           {#each block.entities as e}
             <div class="card">
-              {#each block.columns ?? Object.keys(e.data) as c}
-                <div class="card-field">{c}: <ValueCell field={schemas[e.type]?.fields?.[c] ?? textField} value={e.data[c]} schemas={schemas} /></div>
+              {#each cardColumns(e.data, block.columns) as c}
+                <div class="card-field">{c}: <ValueCell field={schemas[e.type]?.fields?.[c] ?? textField} value={e.data[c]} schemas={schemas} entity={e} fieldName={c} /></div>
               {/each}
             </div>
           {/each}
@@ -65,7 +69,7 @@
           <thead><tr>{#each block.columns ?? [] as c}<th>{c}</th>{/each}</tr></thead>
           <tbody>
             {#each block.entities as e}
-              <tr>{#each block.columns ?? [] as c}<td><ValueCell field={schemas[e.type]?.fields?.[c] ?? textField} value={e.data[c]} schemas={schemas} /></td>{/each}</tr>
+              <tr>{#each block.columns ?? [] as c}<td><ValueCell field={schemas[e.type]?.fields?.[c] ?? textField} value={e.data[c]} schemas={schemas} entity={e} fieldName={c} /></td>{/each}</tr>
             {/each}
           </tbody>
         </table>

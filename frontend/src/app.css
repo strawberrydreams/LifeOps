@@ -131,6 +131,28 @@ main { flex: 1; }
 .badge.due-today { background: #ffe9b3; }
 .chip { font-size: 0.8rem; border: 1px solid #ccc; border-radius: 1rem; padding: 0.05rem 0.5rem; background: #fafafa; cursor: pointer; }
 
+/* ProvenanceTrigger */
+.prov { position: relative; display: inline-flex; align-items: center; }
+.prov-trigger { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; line-height: 1; padding: 0 0.2rem; }
+.prov-popover {
+  position: absolute;
+  z-index: 20;
+  top: 1.4rem;
+  right: 0;
+  min-width: 12rem;
+  padding: 0.75rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.14);
+  color: #18181b;
+}
+.prov-popover label { display: grid; gap: 0.25rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
+.prov-popover select, .prov-popover input { font: inherit; min-width: 0; }
+.prov-updated { margin: 0.5rem 0; color: #52525b; font-size: 0.8rem; }
+.prov-error { margin: -0.25rem 0 0.5rem; color: #b91c1c; font-size: 0.8rem; }
+.prov-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+
 /* SearchPalette */
 .search-palette-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; z-index: 100; }
 .search-palette { background: #fff; width: min(640px, 92vw); max-height: 70vh; overflow-y: auto; border-radius: 8px; padding: 0.75rem; box-shadow: 0 8px 40px rgba(0,0,0,0.25); }

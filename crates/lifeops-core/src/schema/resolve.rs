@@ -76,6 +76,12 @@ impl SchemaSet {
             }
             let mut fields = IndexMap::new();
             for (fname, def) in merged {
+                if fname.starts_with('$') {
+                    return Err(SchemaError::ReservedFieldName {
+                        ty: name.clone(),
+                        field: fname.clone(),
+                    });
+                }
                 let field = convert_field(name, &fname, &def)?;
                 validate_ref_target(raw, name, &fname, &field)?;
                 fields.insert(fname.clone(), field);
@@ -371,6 +377,19 @@ mod tests {
 
         let missing = "type: 할일\nbehaviors:\n  recurrence: { flag: 유령, rule: 반복, date: 마감일 }\nfields:\n  반복: { kind: text }\n  마감일: { kind: date }\n";
         assert!(set_from(&[("할일.yaml", missing)]).is_err());
+    }
+
+    #[test]
+    fn 달러_접두_필드명은_거부() {
+        let err =
+            set_from(&[("a.yaml", "type: A\nfields:\n  \"$meta\": { kind: text }\n")]).unwrap_err();
+        match err {
+            crate::error::SchemaError::ReservedFieldName { ty, field } => {
+                assert_eq!(ty, "A");
+                assert_eq!(field, "$meta");
+            }
+            other => panic!("ReservedFieldName을 기대했지만 {other:?}"),
+        }
     }
 
     #[test]

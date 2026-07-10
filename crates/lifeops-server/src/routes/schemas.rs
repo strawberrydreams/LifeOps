@@ -164,7 +164,8 @@ fn schema_error_to_api(err: SchemaError) -> ApiError {
         | SchemaError::EnumWithoutOptions { .. }
         | SchemaError::UnknownRefTarget { .. }
         | SchemaError::UnknownFieldInOrder { .. }
-        | SchemaError::BadBehavior { .. } => ApiError(
+        | SchemaError::BadBehavior { .. }
+        | SchemaError::ReservedFieldName { .. } => ApiError(
             StatusCode::BAD_REQUEST,
             json!({ "error": { "code": "schema_validation", "message": err.to_string() } }),
         ),
@@ -780,6 +781,26 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
         assert!(!sdir.join("방문.yaml").exists());
+    }
+
+    #[tokio::test]
+    async fn 예약_필드명은_400이고_파일을_남기지_않는다() {
+        let (state, _dir) = test_state().await;
+        let sdir = state.schemas_dir.clone();
+        let app = build_app(state);
+        let res = app
+            .oneshot(post(
+                "/api/schemas",
+                json!({
+                    "type": "예약필드", "fields": { "$meta": { "kind": "text" } }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(res).await;
+        assert_eq!(body["error"]["code"], "schema_validation");
+        assert!(!sdir.join("예약필드.yaml").exists());
     }
 
     #[tokio::test]

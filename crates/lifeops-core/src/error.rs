@@ -57,6 +57,8 @@ pub enum SchemaError {
     UnknownFieldInOrder { ty: String, field: String },
     #[error("타입 '{ty}' behaviors 오류: {message}")]
     BadBehavior { ty: String, message: String },
+    #[error("타입 '{ty}' 필드 '{field}': '$' 접두는 시스템 예약이라 필드명으로 쓸 수 없음")]
+    ReservedFieldName { ty: String, field: String },
 }
 
 #[derive(Debug)]

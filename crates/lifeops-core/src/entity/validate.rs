@@ -12,8 +12,11 @@ pub struct ValidationError(pub Vec<FieldError>);
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let list: Vec<String> =
-            self.0.iter().map(|e| format!("{}: {}", e.field, e.message)).collect();
+        let list: Vec<String> = self
+            .0
+            .iter()
+            .map(|e| format!("{}: {}", e.field, e.message))
+            .collect();
         write!(f, "검증 실패: {}", list.join(" / "))
     }
 }
@@ -27,6 +30,9 @@ pub fn validate_entity(
     let mut errors = Vec::new();
 
     for key in data.keys() {
+        if key == "$meta" {
+            continue;
+        }
         if !schema.fields.contains_key(key) {
             errors.push(FieldError {
                 field: key.clone(),
@@ -35,18 +41,33 @@ pub fn validate_entity(
         }
     }
 
+    if let Some(meta) = data.get("$meta") {
+        if !meta.is_object() {
+            errors.push(FieldError {
+                field: "$meta".into(),
+                message: "객체여야 함".into(),
+            });
+        }
+    }
+
     for (fname, fdef) in &schema.fields {
         let value = data.get(fname);
         let missing = matches!(value, None | Some(Value::Null));
         if fdef.required && missing {
-            errors.push(FieldError { field: fname.clone(), message: "필수 필드".into() });
+            errors.push(FieldError {
+                field: fname.clone(),
+                message: "필수 필드".into(),
+            });
             continue;
         }
         if missing {
             continue;
         }
         if let Err(message) = check_kind(&fdef.kind, fdef, value.unwrap()) {
-            errors.push(FieldError { field: fname.clone(), message });
+            errors.push(FieldError {
+                field: fname.clone(),
+                message,
+            });
         }
     }
 
@@ -59,11 +80,15 @@ pub fn validate_entity(
 
 fn check_kind(kind: &FieldKind, fdef: &ResolvedField, v: &Value) -> Result<(), String> {
     match kind {
-        FieldKind::Text | FieldKind::RichText | FieldKind::Image | FieldKind::Ref => {
-            v.as_str().map(|_| ()).ok_or_else(|| "문자열이어야 함".into())
-        }
+        FieldKind::Text | FieldKind::RichText | FieldKind::Image | FieldKind::Ref => v
+            .as_str()
+            .map(|_| ())
+            .ok_or_else(|| "문자열이어야 함".into()),
         FieldKind::Number => v.as_f64().map(|_| ()).ok_or_else(|| "숫자여야 함".into()),
-        FieldKind::Bool => v.as_bool().map(|_| ()).ok_or_else(|| "true/false여야 함".into()),
+        FieldKind::Bool => v
+            .as_bool()
+            .map(|_| ())
+            .ok_or_else(|| "true/false여야 함".into()),
         FieldKind::Date => {
             let s = v.as_str().ok_or("문자열이어야 함")?;
             chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -84,14 +109,19 @@ fn check_kind(kind: &FieldKind, fdef: &ResolvedField, v: &Value) -> Result<(), S
             if opts.iter().any(|o| o == s) {
                 Ok(())
             } else {
-                Err(format!("허용되지 않는 값 '{s}' (허용: {})", opts.join(", ")))
+                Err(format!(
+                    "허용되지 않는 값 '{s}' (허용: {})",
+                    opts.join(", ")
+                ))
             }
         }
         FieldKind::Money => {
             let o = v.as_object().ok_or("{amount, currency} 객체여야 함")?;
             let amount_ok = o.get("amount").and_then(Value::as_f64).is_some();
-            let currency_ok =
-                o.get("currency").and_then(Value::as_str).is_some_and(|c| !c.is_empty());
+            let currency_ok = o
+                .get("currency")
+                .and_then(Value::as_str)
+                .is_some_and(|c| !c.is_empty());
             if amount_ok && currency_ok {
                 Ok(())
             } else {
@@ -121,7 +151,11 @@ mod tests {
             "type: 시계\nfields:\n  이름: { kind: text, required: true }\n  가격: { kind: money }\n  구매일: { kind: date }\n  상태: { kind: enum, options: [위시, 보유] }\n  링크: { kind: url }\n  개수: { kind: number }\n  관련: { kind: \"list<ref>\", target: 시계 }\n",
         )
         .unwrap();
-        SchemaSet::load_dir(dir.path()).unwrap().get("시계").unwrap().clone()
+        SchemaSet::load_dir(dir.path())
+            .unwrap()
+            .get("시계")
+            .unwrap()
+            .clone()
     }
 
     fn obj(v: Value) -> Map<String, Value> {
@@ -145,7 +179,10 @@ mod tests {
     #[test]
     fn 필수_필드_누락() {
         let err = validate_entity(&schema(), &obj(json!({ "상태": "위시" }))).unwrap_err();
-        assert!(err.0.iter().any(|e| e.field == "이름" && e.message.contains("필수")));
+        assert!(err
+            .0
+            .iter()
+            .any(|e| e.field == "이름" && e.message.contains("필수")));
     }
 
     #[test]
@@ -153,6 +190,25 @@ mod tests {
         let err =
             validate_entity(&schema(), &obj(json!({ "이름": "a", "유령필드": 1 }))).unwrap_err();
         assert!(err.0.iter().any(|e| e.field == "유령필드"));
+    }
+
+    #[test]
+    fn meta_예약키는_미지필드로_거부되지_않는다() {
+        let data = obj(json!({
+            "이름": "a",
+            "$meta": { "이름": { "source": "manual", "updatedAt": "2026-07-08T00:00:00Z" } }
+        }));
+        assert!(validate_entity(&schema(), &data).is_ok());
+    }
+
+    #[test]
+    fn meta가_객체가_아니면_거부() {
+        let data = obj(json!({ "이름": "a", "$meta": "bad" }));
+        let err = validate_entity(&schema(), &data).unwrap_err();
+        assert!(err
+            .0
+            .iter()
+            .any(|e| e.field == "$meta" && e.message.contains("객체")));
     }
 
     #[test]
