@@ -72,6 +72,55 @@ describe("PageRenderer", () => {
     expect(container.textContent).not.toContain("[object Object]");
   });
 
+  it("card columns 생략 시 예약 메타 필드는 표시하지 않는다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "카드뷰",
+        source: "물건",
+        layout: "card",
+        entities: [
+          {
+            id: "e1",
+            type: "물건",
+            data: { 이름: "A", $meta: { 이름: { source: "manual" } } },
+            created_at: "",
+            updated_at: "2026-07-08T00:00:00Z",
+          },
+        ],
+        aggregates: {},
+      },
+    ];
+    const { container } = render(PageRenderer, { page: "테스트", blocks, schemas });
+
+    expect(container.textContent).not.toContain("$meta");
+    expect(screen.getByText(/A/)).toBeInTheDocument();
+    expect(screen.getAllByLabelText("출처 정보")).toHaveLength(1);
+  });
+
+  it("card columns에 명시된 예약 필드는 그대로 표시한다", () => {
+    const blocks: PageBlock[] = [
+      {
+        view: "카드뷰",
+        source: "물건",
+        layout: "card",
+        columns: ["$meta"],
+        entities: [
+          {
+            id: "e1",
+            type: "물건",
+            data: { 이름: "A", $meta: { 이름: { source: "manual" } } },
+            created_at: "",
+            updated_at: "2026-07-08T00:00:00Z",
+          },
+        ],
+        aggregates: {},
+      },
+    ];
+    const { container } = render(PageRenderer, { page: "테스트", blocks, schemas });
+
+    expect(container.textContent).toContain("$meta");
+  });
+
   it("table 블록 제목이 browse 링크가 된다", () => {
     const blocks: PageBlock[] = [{
       view: "다가오는", source: "물건",

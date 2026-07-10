@@ -304,6 +304,20 @@ mod tests {
     }
 
     #[test]
+    fn searchable_fields는_meta_예약키를_검색텍스트에서_제외한다() {
+        let (schema, mut entity) = note_schema_entity();
+        entity.data.insert(
+            "$meta".into(),
+            json!({ "제목": { "source": "imported" } }),
+        );
+        let fields = searchable_fields(&schema, &entity);
+
+        // $meta는 필드로도, 그 안의 "imported" 문자열로도 나오지 않는다.
+        assert!(!fields.iter().any(|(f, _)| f == "$meta"));
+        assert!(!fields.iter().any(|(_, t)| t.contains("imported")));
+    }
+
+    #[test]
     fn searchable_fields_리스트_enum과_richtext는_원소별_추출_url과_ref는_제외() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(

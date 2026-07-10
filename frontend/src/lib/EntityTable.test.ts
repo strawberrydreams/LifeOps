@@ -43,6 +43,23 @@ describe("EntityTable 인라인 편집", () => {
     expect(getByRole("combobox")).toBeInTheDocument();
   });
 
+  it("프로비넌스 트리거의 키보드 활성화는 셀 편집과 행 클릭을 유발하지 않는다", async () => {
+    const rowClickSpy = vi.fn();
+    const { getAllByLabelText, queryByRole, getByRole } = render(EntityTable, { schema, entities, onrowclick: rowClickSpy });
+    const trigger = getAllByLabelText("출처 정보")[1];
+
+    await fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(queryByRole("combobox")).not.toBeInTheDocument();
+    expect(rowClickSpy).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(trigger, { key: " " });
+    expect(queryByRole("combobox")).not.toBeInTheDocument();
+    expect(rowClickSpy).not.toHaveBeenCalled();
+
+    await fireEvent.click(trigger);
+    expect(getByRole("dialog")).toBeInTheDocument();
+  });
+
   it("인라인_저장_실패시_편집유지_에러표시", async () => {
     vi.spyOn(api, "updateEntity").mockRejectedValue(
       new ApiError(400, "validation", "검증 실패", { fields: [{ field: "상태", message: "필수 필드" }] })

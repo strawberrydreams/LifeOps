@@ -129,7 +129,7 @@ impl EntityStore {
         &self,
         schemas: &SchemaSet,
         id: &str,
-        patch: Map<String, Value>,
+        mut patch: Map<String, Value>,
     ) -> Result<Entity, CoreError> {
         let mut entity = self
             .get(id)
@@ -139,16 +139,73 @@ impl EntityStore {
             .get(&entity.entity_type)
             .ok_or_else(|| CoreError::UnknownType(entity.entity_type.clone()))?;
 
+        let now = now_rfc3339();
+        let incoming_meta = patch.remove("$meta");
+        let mut meta = match entity.data.remove("$meta") {
+            Some(Value::Object(meta)) => meta,
+            _ => Map::new(),
+        };
+        let mut fields_with_incoming_source = HashSet::new();
+        let mut invalid_incoming_meta = None;
+
+        match incoming_meta {
+            Some(Value::Object(incoming_meta)) => {
+                for (field, field_meta) in incoming_meta {
+                    // Child metadata entries are caller-owned and stored opaquely.
+                    // A later value edit normalizes that field's metadata to an object
+                    // only when stamping updatedAt/source.
+                    if field_meta
+                        .as_object()
+                        .is_some_and(|field_meta| field_meta.contains_key("source"))
+                    {
+                        fields_with_incoming_source.insert(field.clone());
+                    }
+
+                    match (meta.get_mut(&field), field_meta) {
+                        (Some(Value::Object(existing)), Value::Object(incoming)) => {
+                            merge_json_objects(existing, incoming);
+                        }
+                        (_, field_meta) => {
+                            meta.insert(field, field_meta);
+                        }
+                    }
+                }
+            }
+            Some(value) => {
+                invalid_incoming_meta = Some(value);
+            }
+            None => {}
+        }
+
         for (k, v) in patch {
             if v.is_null() {
                 entity.data.remove(&k);
+                meta.remove(&k);
             } else {
-                entity.data.insert(k, v);
+                entity.data.insert(k.clone(), v);
+                let field_meta = meta
+                    .entry(k.clone())
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if !field_meta.is_object() {
+                    *field_meta = Value::Object(Map::new());
+                }
+                let field_meta = field_meta.as_object_mut().expect("field meta object");
+                field_meta.insert("updatedAt".to_string(), Value::String(now.clone()));
+                if !fields_with_incoming_source.contains(&k) {
+                    field_meta.insert("source".to_string(), Value::String("manual".to_string()));
+                }
             }
+        }
+        if let Some(invalid_incoming_meta) = invalid_incoming_meta {
+            entity
+                .data
+                .insert("$meta".to_string(), invalid_incoming_meta);
+        } else if !meta.is_empty() {
+            entity.data.insert("$meta".to_string(), Value::Object(meta));
         }
         validate_entity(schema, &entity.data)?;
         let edges = collect_refs(schema, &entity.data);
-        entity.updated_at = now_rfc3339();
+        entity.updated_at = now;
 
         let mut tx = self.pool.begin().await?;
         check_ref_targets(&mut tx, schemas, &edges).await?;
@@ -375,6 +432,19 @@ fn validation_error(field: impl Into<String>, message: impl Into<String>) -> Cor
         field: field.into(),
         message: message.into(),
     }]))
+}
+
+fn merge_json_objects(target: &mut Map<String, Value>, incoming: Map<String, Value>) {
+    for (key, value) in incoming {
+        match (target.get_mut(&key), value) {
+            (Some(Value::Object(existing)), Value::Object(incoming)) => {
+                merge_json_objects(existing, incoming);
+            }
+            (_, value) => {
+                target.insert(key, value);
+            }
+        }
+    }
 }
 
 pub(crate) fn row_to_entity(row: sqlx::sqlite::SqliteRow) -> Entity {
@@ -1029,5 +1099,223 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod provenance_tests {
+    use super::*;
+    use crate::schema::SchemaSet;
+    use serde_json::json;
+
+    async fn store_and_schemas() -> (EntityStore, SchemaSet) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("측정.yaml"),
+            "type: 측정\nfields:\n  항목: { kind: text }\n  값: { kind: number }\n",
+        )
+        .unwrap();
+        let schemas = SchemaSet::load_dir(dir.path()).unwrap();
+        let store = EntityStore::open_in_memory().await.unwrap();
+        (store, schemas)
+    }
+
+    fn obj(v: serde_json::Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn 값편집시_updatedAt과_source가_스탬프되고_안건든필드는_비어있다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+        assert!(!entity.data.contains_key("$meta"));
+
+        let updated = store
+            .update(&schemas, &entity.id, obj(json!({ "값": 73.0 })))
+            .await
+            .unwrap();
+
+        assert_eq!(updated.data["값"], 73.0);
+        assert_eq!(updated.data["$meta"]["값"]["source"], "manual");
+        assert!(updated.data["$meta"]["값"]["updatedAt"].is_string());
+        let meta = updated.data["$meta"].as_object().unwrap();
+        assert!(meta.get("항목").is_none());
+    }
+
+    #[tokio::test]
+    async fn 메타만_편집하면_updatedAt은_불변이고_속성만_병합된다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+        let updated = store
+            .update(&schemas, &entity.id, obj(json!({ "값": 73.0 })))
+            .await
+            .unwrap();
+        let stamped_at = updated.data["$meta"]["값"]["updatedAt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let updated = store
+            .update(
+                &schemas,
+                &entity.id,
+                obj(json!({ "$meta": { "값": { "sensitivity": "sensitive" } } })),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.data["$meta"]["값"]["sensitivity"], "sensitive");
+        assert_eq!(updated.data["$meta"]["값"]["updatedAt"], stamped_at);
+        assert_eq!(updated.data["$meta"]["값"]["source"], "manual");
+    }
+
+    #[tokio::test]
+    async fn 값편집시_기존_confidence와_sensitivity는_보존된다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+        store
+            .update(
+                &schemas,
+                &entity.id,
+                obj(json!({
+                    "$meta": { "값": { "confidence": 0.7, "sensitivity": "sensitive" } }
+                })),
+            )
+            .await
+            .unwrap();
+
+        let updated = store
+            .update(&schemas, &entity.id, obj(json!({ "값": 73.0 })))
+            .await
+            .unwrap();
+
+        assert_eq!(updated.data["$meta"]["값"]["confidence"], 0.7);
+        assert_eq!(updated.data["$meta"]["값"]["sensitivity"], "sensitive");
+        assert_eq!(updated.data["$meta"]["값"]["source"], "manual");
+        assert!(updated.data["$meta"]["값"]["updatedAt"].is_string());
+    }
+
+    #[tokio::test]
+    async fn 값과_메타_source를_같이_패치하면_source는_수동으로_덮어쓰지_않는다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+
+        let updated = store
+            .update(
+                &schemas,
+                &entity.id,
+                obj(json!({ "값": 73.0, "$meta": { "값": { "source": "imported" } } })),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.data["$meta"]["값"]["source"], "imported");
+        assert!(updated.data["$meta"]["값"]["updatedAt"].is_string());
+    }
+
+    #[tokio::test]
+    async fn 최상위_meta가_스칼라면_검증_에러이고_저장하지_않는다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+
+        let err = store
+            .update(&schemas, &entity.id, obj(json!({ "$meta": "bad" })))
+            .await
+            .unwrap_err();
+
+        let CoreError::Validation(validation) = err else {
+            panic!("Validation이어야 함")
+        };
+        assert!(validation.0.iter().any(|err| err.field == "$meta"));
+        let loaded = store.get(&entity.id).await.unwrap().unwrap();
+        assert!(!loaded.data.contains_key("$meta"));
+    }
+
+    #[tokio::test]
+    async fn 하위_meta는_불투명하게_저장하고_값편집시_객체로_정규화한다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+
+        let updated = store
+            .update(
+                &schemas,
+                &entity.id,
+                obj(json!({ "$meta": { "값": "bad" } })),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.data["$meta"]["값"], "bad");
+
+        let updated = store
+            .update(&schemas, &entity.id, obj(json!({ "값": 73.0 })))
+            .await
+            .unwrap();
+
+        let field_meta = updated.data["$meta"]["값"].as_object().unwrap();
+        assert_eq!(field_meta.get("source").unwrap(), "manual");
+        assert!(field_meta.get("updatedAt").unwrap().is_string());
+    }
+
+    #[tokio::test]
+    async fn 필드를_제거하면_해당_메타도_프루닝된다() {
+        let (store, schemas) = store_and_schemas().await;
+        let entity = store
+            .create(&schemas, "측정", obj(json!({ "항목": "체중", "값": 72.5 })))
+            .await
+            .unwrap();
+        store
+            .update(&schemas, &entity.id, obj(json!({ "값": 73.0 })))
+            .await
+            .unwrap();
+
+        let updated = store
+            .update(&schemas, &entity.id, obj(json!({ "값": null })))
+            .await
+            .unwrap();
+
+        assert!(!updated.data.contains_key("값"));
+        assert!(!updated.data.contains_key("$meta"));
+    }
+
+    #[tokio::test]
+    async fn create는_호출자_공급_메타를_보존한다() {
+        let (store, schemas) = store_and_schemas().await;
+
+        let entity = store
+            .create(
+                &schemas,
+                "측정",
+                obj(json!({
+                    "항목": "체중",
+                    "값": 72.5,
+                    "$meta": { "값": { "source": "imported", "confidence": 0.7 } }
+                })),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(entity.data["$meta"]["값"]["source"], "imported");
+        assert_eq!(entity.data["$meta"]["값"]["confidence"], 0.7);
+        let field_meta = entity.data["$meta"]["값"].as_object().unwrap();
+        assert!(!field_meta.contains_key("updatedAt"));
     }
 }

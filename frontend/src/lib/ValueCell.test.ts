@@ -19,4 +19,20 @@ describe("ValueCell", () => {
     render(ValueCell, { field: { kind: "bool", required: false }, value: true, schemas: {} });
     expect(screen.getByText("✓")).toBeInTheDocument();
   });
+
+  it("entity+fieldName이 있으면 프로비넌스 트리거를 렌더한다", () => {
+    render(ValueCell, {
+      field: { kind: "number", required: false },
+      value: 72,
+      schemas: {},
+      entity: { id: "e1", type: "측정", data: { 값: 72 }, created_at: "", updated_at: "2026-07-08T00:00:00Z" },
+      fieldName: "값",
+    });
+    expect(screen.getByLabelText("출처 정보")).toBeInTheDocument();
+  });
+
+  it("entity가 없으면 트리거를 렌더하지 않는다", () => {
+    render(ValueCell, { field: { kind: "number", required: false }, value: 72, schemas: {} });
+    expect(screen.queryByLabelText("출처 정보")).toBeNull();
+  });
 });

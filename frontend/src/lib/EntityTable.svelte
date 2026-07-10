@@ -64,7 +64,7 @@
                 tabindex="0"
                 onclick={(ev) => { ev.stopPropagation(); startEdit(e, field); }}
                 onkeydown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); startEdit(e, field); } }}
-              ><ValueCell field={schema.fields[field]} value={e.data[field]} schemas={schemas} /></span>
+              ><ValueCell field={schema.fields[field]} value={e.data[field]} schemas={schemas} entity={e} fieldName={field} /></span>
             {/if}
           </td>
         {/each}

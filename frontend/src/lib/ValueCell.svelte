@@ -1,11 +1,24 @@
 <script lang="ts">
-  import type { ResolvedField, SchemaMap } from "./types";
+  import type { Entity, ResolvedField, SchemaMap } from "./types";
   import { formatValue, todayStr } from "./format";
   import { parseKind } from "./kind";
+  import ProvenanceTrigger from "./ProvenanceTrigger.svelte";
   import { refLabel } from "./reflabel";
   import { navigate } from "./router.svelte";
 
-  let { field, value, schemas }: { field: ResolvedField; value: unknown; schemas: SchemaMap } = $props();
+  let {
+    field,
+    value,
+    schemas,
+    entity = null,
+    fieldName,
+  }: {
+    field: ResolvedField;
+    value: unknown;
+    schemas: SchemaMap;
+    entity?: Entity | null;
+    fieldName?: string;
+  } = $props();
 
   const parsed = $derived(parseKind(field.kind));
   const today = todayStr();
@@ -47,4 +60,7 @@
   {/each}
 {:else}
   <span>{formatValue(field, value)}</span>
+{/if}
+{#if entity && fieldName}
+  <ProvenanceTrigger {entity} {fieldName} />
 {/if}
