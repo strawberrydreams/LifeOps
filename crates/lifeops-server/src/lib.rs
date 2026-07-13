@@ -5,10 +5,15 @@ pub mod routes;
 pub mod state;
 pub mod static_files;
 
+use lifeops_core::entity::EntityStore;
+use lifeops_core::schema::SchemaSet;
+use lifeops_core::view::PageSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{fs, io};
+
+pub type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct RunConfig {
@@ -171,11 +176,59 @@ pub async fn bind_with_fallback(
         .unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::AddrInUse, "가용 포트 없음")))
 }
 
+pub async fn build_state(
+    config: &RunConfig,
+    bound_addr: SocketAddr,
+) -> Result<state::AppState, BoxErr> {
+    let paths = resolve_paths(&config.data_dir);
+    if let Some(parent) = paths.db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let schemas = SchemaSet::load_dir(&paths.schemas_dir)?;
+    let pages = PageSet::load_dir(&paths.views_dir)?;
+    let categories = lifeops_core::schema::load_categories(&paths.categories_path)?;
+    let store = EntityStore::open(&paths.db_path).await?;
+    Ok(state::AppState::new(
+        schemas,
+        pages,
+        categories,
+        store,
+        paths.schemas_dir,
+        paths.views_dir,
+        paths.categories_path,
+        config.data_dir.clone(),
+        bound_addr,
+    ))
+}
+
+/// 시드 설치 → 포트 폴백 바인드 → 상태 로드 → 백업 태스크 → (확정주소, 실행 future).
+pub async fn serve(
+    config: RunConfig,
+) -> Result<(SocketAddr, impl std::future::Future<Output = ()>), BoxErr> {
+    let paths = resolve_paths(&config.data_dir);
+    install_seed_if_empty(&paths)?;
+    let listener = bind_with_fallback(config.bind_addr, config.port).await?;
+    let addr = listener.local_addr()?;
+    let state = build_state(&config, addr).await?;
+    backup::spawn_daily_backup(paths.db_path.clone(), paths.backups_dir.clone(), 7);
+    let app = app::build_app(state);
+    let fut = async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            tracing::error!("서버 실행 실패: {error}");
+        }
+    };
+    Ok((addr, fut))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::build_app;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
     use std::net::IpAddr;
     use std::path::Path;
+    use tower::ServiceExt;
 
     #[test]
     fn 경로_해석() {
@@ -197,6 +250,45 @@ mod tests {
         let p2 = second.local_addr().unwrap().port();
         assert_ne!(p1, p2);
         assert!(p2 > p1 && p2 <= p1.saturating_add(99));
+    }
+
+    #[tokio::test]
+    async fn build_state_시드후_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RunConfig {
+            data_dir: dir.path().to_path_buf(),
+            bind_addr: "127.0.0.1".parse().unwrap(),
+            port: 0,
+        };
+        install_seed_if_empty(&resolve_paths(&config.data_dir)).unwrap();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let state = build_state(&config, addr).await.unwrap();
+        let app = build_app(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn serve_바인드하고_접속됨() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RunConfig {
+            data_dir: dir.path().to_path_buf(),
+            bind_addr: "127.0.0.1".parse().unwrap(),
+            port: 0,
+        };
+        let (addr, fut) = serve(config).await.unwrap();
+        let handle = tokio::spawn(fut);
+        let conn = tokio::net::TcpStream::connect(addr).await;
+        assert!(conn.is_ok());
+        handle.abort();
     }
 
     #[test]
