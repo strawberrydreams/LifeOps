@@ -30,8 +30,8 @@ pub fn validate_entity(
     let mut errors = Vec::new();
 
     for key in data.keys() {
-        if key == "$meta" {
-            continue;
+        if key.starts_with('$') {
+            continue; // $meta, $src 등 시스템 예약키는 스키마 필드 검사에서 제외
         }
         if !schema.fields.contains_key(key) {
             errors.push(FieldError {
@@ -234,6 +234,16 @@ mod tests {
     #[test]
     fn null은_비필수_필드에서_허용() {
         let data = obj(json!({ "이름": "a", "가격": null }));
+        assert!(validate_entity(&schema(), &data).is_ok());
+    }
+
+    #[test]
+    fn 달러_접두_예약키는_미지필드로_거부되지_않는다() {
+        let data = obj(json!({
+            "이름": "a",
+            "$src": "x:2071192832455430283",
+            "$meta": { "이름": { "source": "imported:x" } }
+        }));
         assert!(validate_entity(&schema(), &data).is_ok());
     }
 }
