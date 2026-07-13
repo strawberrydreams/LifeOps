@@ -5,11 +5,21 @@ export type Route =
   | { name: "new"; type: string }
   | { name: "page"; pageName: string }
   | { name: "type-new" }
-  | { name: "type-edit"; type: string };
+  | { name: "type-edit"; type: string }
+  | { name: "page-new" }
+  | { name: "page-edit"; pageName: string };
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 export function parseRoute(url: string): Route {
   const [path, query = ""] = url.split("?");
-  const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+  const parts = path.split("/").filter(Boolean).map(safeDecodeURIComponent);
   const params: Record<string, string> = {};
   new URLSearchParams(query).forEach((v, k) => (params[k] = v));
   if (parts.length === 0) return { name: "home" };
@@ -18,6 +28,8 @@ export function parseRoute(url: string): Route {
   if (parts[0] === "browse" && parts[1]) return { name: "browse", type: parts[1], params };
   if (parts[0] === "entity" && parts[1]) return { name: "entity", id: parts[1] };
   if (parts[0] === "new" && parts[1]) return { name: "new", type: parts[1] };
+  if (parts[0] === "pages" && parts[1] === "new") return { name: "page-new" };
+  if (parts[0] === "pages" && parts[1] && parts[2] === "edit") return { name: "page-edit", pageName: parts[1] };
   if (parts[0] === "pages" && parts[1]) return { name: "page", pageName: parts[1] };
   return { name: "home" };
 }

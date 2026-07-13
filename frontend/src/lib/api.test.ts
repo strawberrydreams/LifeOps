@@ -118,4 +118,51 @@ describe("api", () => {
     expect(decodeURIComponent(url)).toContain("q=세이코");
     expect(url).toContain("limit=30");
   });
+
+  it("getPages는 GET /api/pages", async () => {
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ pages: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    const { getPages } = await import("./api");
+    await getPages();
+    expect(f).toHaveBeenCalledWith("/api/pages", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("createPage는 POST /api/pages로 def를 보낸다", async () => {
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 201 }));
+    vi.stubGlobal("fetch", f);
+    const { createPage } = await import("./api");
+    const def = { page: "대시보드", blocks: [] };
+    await createPage(def);
+    expect(f).toHaveBeenCalledWith("/api/pages", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(def),
+    }));
+  });
+
+  it("previewPage는 POST /api/pages/preview", async () => {
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ page: "p", blocks: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    const { previewPage } = await import("./api");
+    await previewPage({ page: "p", blocks: [] });
+    expect(f).toHaveBeenCalledWith("/api/pages/preview", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("updatePage와 deletePage는 페이지명을 URL encoding한다", async () => {
+    const f = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", f);
+    const { updatePage, deletePage } = await import("./api");
+    const def = { page: "월간 대시보드/요약", blocks: [] };
+
+    await updatePage("월간 대시보드/요약", def);
+    await deletePage("월간 대시보드/요약");
+
+    const encoded = encodeURIComponent("월간 대시보드/요약");
+    expect(f).toHaveBeenNthCalledWith(1, `/api/pages/${encoded}`, expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify(def),
+    }));
+    expect(f).toHaveBeenNthCalledWith(2, `/api/pages/${encoded}`, expect.objectContaining({ method: "DELETE" }));
+  });
 });

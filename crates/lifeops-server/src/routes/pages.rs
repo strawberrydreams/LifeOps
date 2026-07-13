@@ -141,7 +141,12 @@ async fn delete_page(st: &AppState, name: &str) -> Result<(), ApiError> {
 }
 
 fn safe_page_filename(name: &str) -> Result<String, ApiError> {
-    if name.trim().is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+    if name.trim().is_empty()
+        || name == "new"
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+    {
         return Err(bad_request(
             "bad_page_name",
             "안전하지 않은 페이지 이름입니다",
@@ -276,6 +281,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dup.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn 예약된_new_페이지명은_400이고_파일을_남기지_않는다() {
+        let (state, _dir) = test_state().await;
+        let vdir = state.views_dir.clone();
+        let app = build_app(state);
+        let res = app
+            .oneshot(post(
+                "/api/pages",
+                json!({ "page": "new", "blocks": [] }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(body_json(res).await["error"]["code"], "bad_page_name");
+        assert!(!vdir.join("new.yaml").exists());
     }
 
     #[tokio::test]

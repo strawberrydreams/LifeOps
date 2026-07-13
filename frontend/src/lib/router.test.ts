@@ -22,7 +22,15 @@ describe("parseRoute", () => {
       type: "물건",
     });
   });
+  it("페이지 생성/수정 라우트를 파싱한다", () => {
+    expect(parseRoute("/pages/new")).toEqual({ name: "page-new" });
+    expect(parseRoute("/pages/홈/edit")).toEqual({ name: "page-edit", pageName: "홈" });
+    expect(parseRoute("/pages/데일리 대시보드")).toMatchObject({ name: "page", pageName: "데일리 대시보드" });
+  });
   it("루트는 home", () => {
     expect(parseRoute("/")).toMatchObject({ name: "home" });
+  });
+  it("잘못된 percent encoding도 예외 없이 원문으로 파싱한다", () => {
+    expect(parseRoute("/pages/%E0%A4%A")).toEqual({ name: "page", pageName: "%E0%A4%A" });
   });
 });

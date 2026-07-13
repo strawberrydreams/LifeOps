@@ -39,6 +39,31 @@ export interface ProfileSection {
   fields: string[];
 }
 
+export interface ViewBlockDef {
+  view: string;
+  source: string;
+  filter?: Record<string, unknown> | null;
+  sort?: string | null;
+  layout: "table" | "checklist" | "card" | "chart" | "record" | "profile";
+  columns?: string[] | null;
+  aggregate?: Record<string, string> | null;
+  limit?: number | null;
+  x?: string | null;
+  y?: string | null;
+  series?: string | null;
+  chart_type?: "line" | "bar";
+  sections?: ProfileSection[] | null;
+}
+
+export interface PageDef {
+  page: string;
+  blocks: ViewBlockDef[];
+}
+
+export interface PagesResponse {
+  pages: PageDef[];
+}
+
 export interface ChartPoint {
   x: unknown;
   y: number;
@@ -177,4 +202,24 @@ export function search(q: string, limit?: number): Promise<SearchResponse> {
   const params = new URLSearchParams({ q });
   if (limit !== undefined) params.set("limit", String(limit));
   return request("GET", `/api/search?${params.toString()}`);
+}
+
+export function getPages(): Promise<PagesResponse> {
+  return request("GET", "/api/pages");
+}
+
+export function createPage(def: PageDef): Promise<{ ok: boolean }> {
+  return request("POST", "/api/pages", def);
+}
+
+export function updatePage(name: string, def: PageDef): Promise<{ ok: boolean }> {
+  return request("PUT", `/api/pages/${encodeURIComponent(name)}`, def);
+}
+
+export function deletePage(name: string): Promise<void> {
+  return request("DELETE", `/api/pages/${encodeURIComponent(name)}`);
+}
+
+export function previewPage(def: PageDef): Promise<{ page: string; blocks: PageBlock[] }> {
+  return request("POST", "/api/pages/preview", def);
 }
