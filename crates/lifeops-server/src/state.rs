@@ -1,6 +1,7 @@
 use lifeops_core::entity::EntityStore;
 use lifeops_core::schema::{CategoryDef, SchemaSet};
 use lifeops_core::view::PageSet;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -15,9 +16,12 @@ pub struct AppState {
     pub schemas_dir: PathBuf,
     pub views_dir: PathBuf,
     pub categories_path: PathBuf,
+    pub data_dir: PathBuf,
+    pub bound_addr: SocketAddr,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         schemas: SchemaSet,
         pages: PageSet,
@@ -26,6 +30,8 @@ impl AppState {
         schemas_dir: PathBuf,
         views_dir: PathBuf,
         categories_path: PathBuf,
+        data_dir: PathBuf,
+        bound_addr: SocketAddr,
     ) -> Self {
         AppState {
             schemas: Arc::new(RwLock::new(schemas)),
@@ -35,6 +41,8 @@ impl AppState {
             schemas_dir,
             views_dir,
             categories_path,
+            data_dir,
+            bound_addr,
         }
     }
 }
@@ -86,7 +94,17 @@ pub async fn test_state() -> (AppState, tempfile::TempDir) {
         .await
         .unwrap();
     (
-        AppState::new(schemas, pages, categories, store, sdir, vdir, cat_path),
+        AppState::new(
+            schemas,
+            pages,
+            categories,
+            store,
+            sdir,
+            vdir,
+            cat_path,
+            dir.path().to_path_buf(),
+            "127.0.0.1:0".parse().unwrap(),
+        ),
         dir,
     )
 }

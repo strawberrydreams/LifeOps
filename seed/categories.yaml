@@ -1,0 +1,4 @@
+categories:
+  - { name: 할일, icon: "✅" }
+  - { name: 컬렉션, icon: "📦" }
+  - { name: 나, icon: "🧑" }

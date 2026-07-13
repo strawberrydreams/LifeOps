@@ -30,6 +30,11 @@ describe("parseRoute", () => {
   it("루트는 home", () => {
     expect(parseRoute("/")).toMatchObject({ name: "home" });
   });
+  it("설정 경로를 기존 페이지 경로보다 구체적으로 파싱한다", () => {
+    expect(parseRoute("/settings")).toEqual({ name: "settings" });
+    expect(parseRoute("/pages/settings")).toEqual({ name: "page", pageName: "settings" });
+    expect(parseRoute("/settings/extra")).toEqual({ name: "home" });
+  });
   it("잘못된 percent encoding도 예외 없이 원문으로 파싱한다", () => {
     expect(parseRoute("/pages/%E0%A4%A")).toEqual({ name: "page", pageName: "%E0%A4%A" });
   });

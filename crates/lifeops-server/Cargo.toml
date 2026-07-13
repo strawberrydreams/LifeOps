@@ -3,11 +3,23 @@ name = "lifeops-server"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "lifeops_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lifeops-server"
+path = "src/main.rs"
+
 [dependencies]
 lifeops-core = { path = "../lifeops-core" }
 axum = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+directories = "5"
 indexmap = { version = "2", features = ["serde"] }
+local-ip-address = "0.6"
+mime_guess = "2"
+rust-embed = "8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "fs"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,3 +30,6 @@ tracing-subscriber = "0.3"
 [dev-dependencies]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[features]
+embed-spa = []

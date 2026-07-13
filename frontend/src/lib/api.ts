@@ -223,3 +223,13 @@ export function deletePage(name: string): Promise<void> {
 export function previewPage(def: PageDef): Promise<{ page: string; blocks: PageBlock[] }> {
   return request("POST", "/api/pages/preview", def);
 }
+
+export interface SystemInfo {
+  data_dir: string;
+  port: number;
+  lan_addrs: string[];
+}
+
+export function getSystemInfo(): Promise<SystemInfo> {
+  return request("GET", "/api/system/info");
+}

@@ -1,0 +1,2 @@
+# Tauri build가 capability 검증용으로 매번 재생성한다.
+/gen/schemas/
