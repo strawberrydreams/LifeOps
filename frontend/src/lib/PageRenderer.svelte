@@ -8,7 +8,7 @@
   import QuickRecordWidget from "./widgets/QuickRecordWidget.svelte";
   import ValueCell from "./ValueCell.svelte";
 
-  let { page, blocks, schemas }: { page: string; blocks: PageBlock[]; schemas: SchemaMap } = $props();
+  let { page, blocks, schemas, onedit }: { page: string; blocks: PageBlock[]; schemas: SchemaMap; onedit?: () => void } = $props();
 
   const textField: ResolvedField = { kind: "text", required: false };
 
@@ -33,7 +33,10 @@
 </script>
 
 <div class="page">
-  <h1>{page}</h1>
+  <div class="page-head">
+    <h1>{page}</h1>
+    {#if onedit}<button type="button" class="edit-page" onclick={onedit}>편집</button>{/if}
+  </div>
   {#each blocks as block}
     <section class="block">
       {#if block.layout === "checklist" || block.layout === "profile"}

@@ -2,6 +2,7 @@
   import type { SchemaMap } from "../types";
   import { getPage, ApiError, type PageBlock } from "../api";
   import PageRenderer from "../PageRenderer.svelte";
+  import { navigate } from "../router.svelte";
 
   let { schemas }: { schemas: SchemaMap } = $props();
 
@@ -28,7 +29,7 @@
     <ul>{#each Object.keys(schemas) as t}<li>{t}</li>{/each}</ul>
   </div>
 {:else if blocks}
-  <PageRenderer page="홈" blocks={blocks} schemas={schemas} />
+  <PageRenderer page="홈" blocks={blocks} schemas={schemas} onedit={() => navigate("/pages/홈/edit")} />
 {:else}
   <p>불러오는 중…</p>
 {/if}

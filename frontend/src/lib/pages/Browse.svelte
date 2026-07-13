@@ -2,6 +2,7 @@
   import type { Entity, SchemaMap } from "../types";
   import { listEntities } from "../api";
   import { navigate } from "../router.svelte";
+  import { setPageSeed, blockFromBrowseParams } from "../viewseed.svelte";
   import EntityTable from "../EntityTable.svelte";
 
   let { schemas, type, params }: { schemas: SchemaMap; type: string; params: Record<string, string> } = $props();
@@ -22,6 +23,7 @@
       <h1>{type} <span class="count">{loaded ? `${entities.length}개` : ""}</span></h1>
     </div>
     <div class="actions">
+      <button type="button" class="save-view" onclick={() => { setPageSeed(blockFromBrowseParams(type, params)); navigate("/pages/new"); }}>뷰로 저장</button>
       <button type="button" class="settings" onclick={() => navigate(`/types/${encodeURIComponent(type)}/edit`)}>타입 설정</button>
       <button type="button" class="new" onclick={() => navigate(`/new/${encodeURIComponent(type)}`)}>+ 새 {type}</button>
     </div>

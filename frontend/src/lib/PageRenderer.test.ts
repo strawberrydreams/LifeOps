@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/svelte";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/svelte";
 import PageRenderer from "./PageRenderer.svelte";
 import type { ChartSeries, PageBlock } from "./api";
 import type { SchemaMap } from "./types";
@@ -35,6 +35,13 @@ const chart: ChartSeries[] = [
 ];
 
 describe("PageRenderer", () => {
+  it("onedit가 있으면 편집 버튼을 보이고 클릭 시 호출한다", async () => {
+    const onedit = vi.fn();
+    render(PageRenderer, { page: "홈", blocks: [], schemas: {}, onedit });
+    await fireEvent.click(screen.getByRole("button", { name: "편집" }));
+    expect(onedit).toHaveBeenCalled();
+  });
+
   it("layout이 card면 카드 레이아웃을 렌더링한다 (table 아님)", () => {
     const blocks: PageBlock[] = [
       {
