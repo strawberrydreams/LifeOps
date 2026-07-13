@@ -16,7 +16,7 @@ pub async fn info(State(state): State<AppState>) -> Json<Value> {
 }
 
 /// 현재 호스트의 사설 IPv4 인터페이스를 중복 없는 결정적 URL 목록으로 만든다.
-fn lan_addresses(port: u16) -> Vec<String> {
+pub fn lan_addresses(port: u16) -> Vec<String> {
     let interfaces = local_ip_address::list_afinet_netifas().unwrap_or_default();
     lan_addresses_from(port, interfaces.into_iter().map(|(_, ip)| ip))
 }
