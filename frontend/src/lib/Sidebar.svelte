@@ -3,9 +3,10 @@
   import { navigate } from "./router.svelte";
   import { reload, getSchemas } from "./api";
 
-  let { schemas, categories, onreloaded, onsearch = () => {} }: {
+  let { schemas, categories, pages = [], onreloaded, onsearch = () => {} }: {
     schemas: SchemaMap;
     categories: Category[];
+    pages?: string[];
     onreloaded: (r: SchemasResponse) => void;
     onsearch?: () => void;
   } = $props();
@@ -40,6 +41,17 @@
   <h1>LifeOps</h1>
   <button type="button" class="search" onclick={onsearch}>🔍 검색</button>
   <button type="button" class="home" onclick={() => navigate("/")}>🏠 홈</button>
+  <div class="group pages-group">
+    <div class="group-header static">📄 페이지</div>
+    <button type="button" class="add-page" title="새 페이지" onclick={() => navigate("/pages/new")}>+ 새 페이지</button>
+    {#if pages.length > 0}
+      <ul>
+        {#each pages as p (p)}
+          <li><button type="button" onclick={() => navigate(`/pages/${encodeURIComponent(p)}`)}>{p}</button></li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
   {#each groups as g (g.cat.name)}
     <div class="group">
       <button type="button" class="group-header" onclick={() => (collapsed[g.cat.name] = !collapsed[g.cat.name])}>
