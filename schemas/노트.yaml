@@ -4,3 +4,5 @@ fields:
   제목: { kind: text, required: true }
   본문: { kind: richtext }
   태그: { kind: "list<text>" }
+  출처: { kind: text }
+  url: { kind: url }

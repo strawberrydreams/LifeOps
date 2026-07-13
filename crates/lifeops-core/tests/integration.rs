@@ -257,5 +257,5 @@ fn 프로필_페이지_시드가_profile_레이아웃과_sections를_가진다()
     let block = &page.blocks[0];
     assert_eq!(block.layout, Layout::Profile);
     assert_eq!(block.source, "프로필");
-    assert!(block.sections.as_ref().unwrap().len() >= 1);
+    assert!(!block.sections.as_ref().unwrap().is_empty());
 }

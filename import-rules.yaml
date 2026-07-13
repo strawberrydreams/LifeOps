@@ -1,0 +1,40 @@
+# archives importer 라우팅 규칙 (계획 10). 위에서부터 첫 매치 승리, default가 폴백.
+rules:
+  # X(Twitter) 북마크 → 노트 (출처/링크 보존)
+  - match: { fm.source: x }
+    to: 노트
+    map:
+      제목: fm.aliases[0] | fm.title | filename
+      본문: body
+      태그: fm.tags
+      출처: fm.handle | fm.author
+      url: fm.url
+    provenance: imported:x
+
+  # 카테고리별 위시리스트 문서 → 물건 (표 행당 1개, 상태=위시, 카테고리=경로 유추)
+  - match: { path: "*위시리스트*" }
+    to: 물건
+    rows: table
+    cols:
+      "제품|분류": 이름
+      가격: 가격
+      링크: 구매링크
+    set:
+      상태: "위시"
+      카테고리: dirs
+    provenance: imported
+
+  # Obsidian 네비게이션 메타 → 스킵
+  - match: { fm.type: [moc, tag-map, maps-index, dashboard] }
+    skip: true
+  - match: { path: "*/_maps/*" }
+    skip: true
+
+  # 나머지(reference·decision·lineup·plan·control·프론트매터 없음) → 노트
+  - default:
+      to: 노트
+      map:
+        제목: fm.title | filename
+        본문: body
+        태그: fm.tags
+      provenance: imported

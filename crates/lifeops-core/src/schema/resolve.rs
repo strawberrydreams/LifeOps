@@ -347,6 +347,32 @@ mod tests {
     }
 
     #[test]
+    fn 실제_노트_스키마는_임포트_필드와_기존_계약을_유지한다() {
+        let schemas_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas");
+        let set = SchemaSet::load_dir(&schemas_dir).unwrap();
+        let note = set.get("노트").unwrap();
+
+        assert_eq!(note.category.as_deref(), Some("메모"));
+        assert_eq!(
+            note.fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["제목", "본문", "태그", "출처", "url"]
+        );
+        assert_eq!(note.fields["제목"].kind, FieldKind::Text);
+        assert!(note.fields["제목"].required);
+        assert_eq!(note.fields["본문"].kind, FieldKind::RichText);
+        assert!(!note.fields["본문"].required);
+        assert_eq!(
+            note.fields["태그"].kind,
+            FieldKind::List(Box::new(FieldKind::Text))
+        );
+        assert!(!note.fields["태그"].required);
+        assert_eq!(note.fields["출처"].kind, FieldKind::Text);
+        assert!(!note.fields["출처"].required);
+        assert_eq!(note.fields["url"].kind, FieldKind::Url);
+        assert!(!note.fields["url"].required);
+    }
+
+    #[test]
     fn behaviors_recurrence_필드_kind_검증() {
         let ok = "type: 할일\nbehaviors:\n  recurrence: { flag: 완료, rule: 반복, date: 마감일 }\nfields:\n  완료: { kind: bool }\n  반복: { kind: text }\n  마감일: { kind: date }\n";
         let set = set_from(&[("할일.yaml", ok)]).unwrap();

@@ -1,0 +1,17 @@
+[package]
+name = "lifeops-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "lifeops"
+path = "src/main.rs"
+
+[dependencies]
+lifeops-core = { path = "../lifeops-core" }
+clap = { version = "4", features = ["derive"] }
+walkdir = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

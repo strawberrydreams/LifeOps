@@ -24,6 +24,17 @@ pub struct RefEdge {
     pub field_name: String,
 }
 
+pub(crate) enum EntityMutation {
+    Create {
+        entity_type: String,
+        data: Map<String, Value>,
+    },
+    Update {
+        id: String,
+        patch: Map<String, Value>,
+    },
+}
+
 const MIGRATION: &str = "
 CREATE TABLE IF NOT EXISTS entities (
   id TEXT PRIMARY KEY,
@@ -75,43 +86,8 @@ impl EntityStore {
         entity_type: &str,
         data: Map<String, Value>,
     ) -> Result<Entity, CoreError> {
-        let schema = schemas
-            .get(entity_type)
-            .ok_or_else(|| CoreError::UnknownType(entity_type.to_string()))?;
-        validate_entity(schema, &data)?;
-        let edges = collect_refs(schema, &data);
-        let now = now_rfc3339();
-        let entity = Entity {
-            id: uuid::Uuid::new_v4().to_string(),
-            entity_type: entity_type.to_string(),
-            data,
-            created_at: now.clone(),
-            updated_at: now,
-        };
-
         let mut tx = self.pool.begin().await?;
-        if schema.singleton {
-            let exists = sqlx::query("SELECT 1 FROM entities WHERE type = ? LIMIT 1")
-                .bind(entity_type)
-                .fetch_optional(&mut *tx)
-                .await?
-                .is_some();
-            if exists {
-                return Err(CoreError::SingletonExists(entity_type.to_string()));
-            }
-        }
-        check_ref_targets(&mut tx, schemas, &edges).await?;
-        sqlx::query(
-            "INSERT INTO entities (id, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&entity.id)
-        .bind(&entity.entity_type)
-        .bind(serde_json::Value::Object(entity.data.clone()).to_string())
-        .bind(&entity.created_at)
-        .bind(&entity.updated_at)
-        .execute(&mut *tx)
-        .await?;
-        insert_refs(&mut tx, &entity.id, &edges).await?;
+        let entity = Self::create_in_tx(&mut tx, schemas, entity_type, data).await?;
         tx.commit().await?;
         Ok(entity)
     }
@@ -129,11 +105,94 @@ impl EntityStore {
         &self,
         schemas: &SchemaSet,
         id: &str,
+        patch: Map<String, Value>,
+    ) -> Result<Entity, CoreError> {
+        let mut tx = self.pool.begin().await?;
+        let entity = Self::update_in_tx(&mut tx, schemas, id, patch).await?;
+        tx.commit().await?;
+        Ok(entity)
+    }
+
+    pub(crate) async fn apply_mutations_atomic(
+        &self,
+        schemas: &SchemaSet,
+        mutations: Vec<EntityMutation>,
+    ) -> Result<Vec<Entity>, CoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut entities = Vec::with_capacity(mutations.len());
+        for mutation in mutations {
+            let entity = match mutation {
+                EntityMutation::Create { entity_type, data } => {
+                    Self::create_in_tx(&mut tx, schemas, &entity_type, data).await?
+                }
+                EntityMutation::Update { id, patch } => {
+                    Self::update_in_tx(&mut tx, schemas, &id, patch).await?
+                }
+            };
+            entities.push(entity);
+        }
+        tx.commit().await?;
+        Ok(entities)
+    }
+
+    async fn create_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        schemas: &SchemaSet,
+        entity_type: &str,
+        data: Map<String, Value>,
+    ) -> Result<Entity, CoreError> {
+        let schema = schemas
+            .get(entity_type)
+            .ok_or_else(|| CoreError::UnknownType(entity_type.to_string()))?;
+        validate_entity(schema, &data)?;
+        let edges = collect_refs(schema, &data);
+        let now = now_rfc3339();
+        let entity = Entity {
+            id: uuid::Uuid::new_v4().to_string(),
+            entity_type: entity_type.to_string(),
+            data,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        if schema.singleton {
+            let exists = sqlx::query("SELECT 1 FROM entities WHERE type = ? LIMIT 1")
+                .bind(entity_type)
+                .fetch_optional(&mut **tx)
+                .await?
+                .is_some();
+            if exists {
+                return Err(CoreError::SingletonExists(entity_type.to_string()));
+            }
+        }
+        check_ref_targets(tx, schemas, &edges).await?;
+        sqlx::query(
+            "INSERT INTO entities (id, type, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&entity.id)
+        .bind(&entity.entity_type)
+        .bind(serde_json::Value::Object(entity.data.clone()).to_string())
+        .bind(&entity.created_at)
+        .bind(&entity.updated_at)
+        .execute(&mut **tx)
+        .await?;
+        insert_refs(tx, &entity.id, &edges).await?;
+        Ok(entity)
+    }
+
+    async fn update_in_tx(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        schemas: &SchemaSet,
+        id: &str,
         mut patch: Map<String, Value>,
     ) -> Result<Entity, CoreError> {
-        let mut entity = self
-            .get(id)
-            .await?
+        let row =
+            sqlx::query("SELECT id, type, data, created_at, updated_at FROM entities WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut **tx)
+                .await?;
+        let mut entity = row
+            .map(row_to_entity)
             .ok_or_else(|| CoreError::NotFound(id.to_string()))?;
         let schema = schemas
             .get(&entity.entity_type)
@@ -207,20 +266,18 @@ impl EntityStore {
         let edges = collect_refs(schema, &entity.data);
         entity.updated_at = now;
 
-        let mut tx = self.pool.begin().await?;
-        check_ref_targets(&mut tx, schemas, &edges).await?;
+        check_ref_targets(tx, schemas, &edges).await?;
         sqlx::query("UPDATE entities SET data = ?, updated_at = ? WHERE id = ?")
             .bind(serde_json::Value::Object(entity.data.clone()).to_string())
             .bind(&entity.updated_at)
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("DELETE FROM refs WHERE from_id = ?")
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        insert_refs(&mut tx, id, &edges).await?;
-        tx.commit().await?;
+        insert_refs(tx, id, &edges).await?;
         Ok(entity)
     }
 
@@ -1099,6 +1156,53 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn 임포트_예약키는_저장왕복하고_검색에_새지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("노트.yaml"),
+            "type: 노트\nfields:\n  제목: { kind: text, required: true }\n  본문: { kind: richtext }\n",
+        )
+        .unwrap();
+        let schemas = SchemaSet::load_dir(dir.path()).unwrap();
+        let store = EntityStore::open_in_memory().await.unwrap();
+
+        let mut data = Map::new();
+        data.insert("제목".into(), serde_json::json!("사용자 권한 정리"));
+        data.insert("본문".into(), serde_json::json!("chmod chown 요약"));
+        data.insert(
+            "$src".into(),
+            serde_json::json!("path:Knowleage/Linux/권한.md"),
+        );
+        data.insert(
+            "$meta".into(),
+            serde_json::json!({ "제목": { "source": "imported" } }),
+        );
+        let created = store.create(&schemas, "노트", data).await.unwrap();
+
+        let got = store.get(&created.id).await.unwrap().unwrap();
+        assert_eq!(
+            got.data["$src"],
+            serde_json::json!("path:Knowleage/Linux/권한.md")
+        );
+        assert_eq!(
+            got.data["$meta"]["제목"]["source"],
+            serde_json::json!("imported")
+        );
+
+        // "imported"·"path:"는 실제 검색 대상 필드(제목/본문)에 없으므로 0건
+        let hits = store.search(&schemas, "imported", 20).await.unwrap();
+        assert_eq!(
+            hits.total, 0,
+            "프로비넌스/출처키 문자열이 검색에 새면 안 됨"
+        );
+        let source_hits = store.search(&schemas, "path:Knowleage", 20).await.unwrap();
+        assert_eq!(source_hits.total, 0, "출처키 값이 검색에 새면 안 됨");
+        // 실제 본문 토큰은 검색됨(회귀 안전망)
+        let ok = store.search(&schemas, "chmod", 20).await.unwrap();
+        assert_eq!(ok.total, 1);
     }
 }
 

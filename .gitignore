@@ -33,9 +33,14 @@ backups/
 
 # 로컬 전용 — GitHub에 올리지 않음
 /life-archive/
+/archives/
 /docs/
 CLAUDE.md
 implementation.md
+
+# 수집 파이프라인 원본·스테이징 (개인 데이터 — 추적 금지)
+/ingest/
+/imports/
 
 # 루트의 스크래치 스크린샷/이미지
 /*.png
