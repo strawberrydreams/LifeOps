@@ -41,6 +41,7 @@
   <h1>LifeOps</h1>
   <button type="button" class="search" onclick={onsearch}>🔍 검색</button>
   <button type="button" class="home" onclick={() => navigate("/")}>🏠 홈</button>
+  <button type="button" class="settings-link" onclick={() => navigate("/settings")}>⚙️ 설정</button>
   <div class="group pages-group">
     <div class="group-header static">📄 페이지</div>
     <button type="button" class="add-page" title="새 페이지" onclick={() => navigate("/pages/new")}>+ 새 페이지</button>

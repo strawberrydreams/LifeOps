@@ -32,7 +32,8 @@ main { flex: 1; }
   visibility: visible;
 }
 .sidebar .search,
-.sidebar .home {
+.sidebar .home,
+.sidebar .settings-link {
   display: block;
   width: 100%;
   text-align: left;
@@ -45,6 +46,13 @@ main { flex: 1; }
 .sidebar .chev {
   float: right;
 }
+
+/* Settings */
+.settings { padding: 1.5rem; max-width: 640px; }
+.settings .row { display: flex; align-items: center; gap: 0.75rem; margin: 0.75rem 0; }
+.settings .label { min-width: 8rem; color: var(--muted, #666); }
+.settings code { word-break: break-all; }
+.settings .error { color: #b91c1c; }
 
 /* ChecklistWidget */
 .todo .checklist { list-style: none; padding: 0; }

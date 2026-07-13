@@ -7,7 +7,8 @@ export type Route =
   | { name: "type-new" }
   | { name: "type-edit"; type: string }
   | { name: "page-new" }
-  | { name: "page-edit"; pageName: string };
+  | { name: "page-edit"; pageName: string }
+  | { name: "settings" };
 
 function safeDecodeURIComponent(value: string): string {
   try {
@@ -23,6 +24,7 @@ export function parseRoute(url: string): Route {
   const params: Record<string, string> = {};
   new URLSearchParams(query).forEach((v, k) => (params[k] = v));
   if (parts.length === 0) return { name: "home" };
+  if (parts.length === 1 && parts[0] === "settings") return { name: "settings" };
   if (parts[0] === "types" && parts[1] === "new") return { name: "type-new" };
   if (parts[0] === "types" && parts[1] && parts[2] === "edit") return { name: "type-edit", type: parts[1] };
   if (parts[0] === "browse" && parts[1]) return { name: "browse", type: parts[1], params };

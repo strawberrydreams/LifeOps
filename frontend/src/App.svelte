@@ -11,6 +11,7 @@
   import PageView from "./lib/pages/PageView.svelte";
   import TypeEditor from "./lib/pages/TypeEditor.svelte";
   import PageEditor from "./lib/pages/PageEditor.svelte";
+  import Settings from "./lib/pages/Settings.svelte";
 
   let schemas = $state<SchemaMap>({});
   let categories = $state<Category[]>([]);
@@ -69,6 +70,8 @@
         {#key router.route.pageName}
           <PageEditor pageName={router.route.pageName} schemas={schemas} onsaved={(name) => { refreshPages(); navigate(`/pages/${encodeURIComponent(name)}`); }} ondeleted={() => { refreshPages(); navigate("/"); }} />
         {/key}
+      {:else if router.route.name === "settings"}
+        <Settings />
       {/if}
     </main>
     <SearchPalette open={paletteOpen} schemas={schemas} categories={categories} onclose={() => (paletteOpen = false)} />

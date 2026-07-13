@@ -60,6 +60,14 @@ describe("Sidebar", () => {
     expect(onsearch).toHaveBeenCalled();
   });
 
+  it("설정 버튼은 설정 경로로 이동한다", async () => {
+    render(Sidebar, { schemas: {}, categories: [], onreloaded: vi.fn() });
+
+    await fireEvent.click(screen.getByRole("button", { name: "⚙️ 설정" }));
+
+    expect(navigate).toHaveBeenCalledWith("/settings");
+  });
+
   it("페이지 섹션이 페이지 목록과 새 페이지 버튼을 보인다", async () => {
     render(Sidebar, { schemas, categories, pages: ["건강", "대시보드"], onreloaded: () => {} });
     expect(screen.getByText("건강")).toBeInTheDocument();

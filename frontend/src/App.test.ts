@@ -54,4 +54,15 @@ describe("App", () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/pages/%EA%B1%B4%EA%B0%95"));
     await waitFor(() => expect(api.getPages).toHaveBeenCalledTimes(2));
   });
+
+  it("settings 라우트에서 설정 화면을 렌더한다", async () => {
+    router.route = { name: "settings" };
+    vi.spyOn(api, "getSchemas").mockResolvedValue({ types: {}, categories: [] });
+    vi.spyOn(api, "getPages").mockResolvedValue({ pages: [] });
+    vi.spyOn(api, "getSystemInfo").mockResolvedValue({ data_dir: "/tmp/lifeops", port: 3000, lan_addrs: [] });
+
+    render(App);
+
+    expect(await screen.findByRole("heading", { name: "설정" })).toBeInTheDocument();
+  });
 });

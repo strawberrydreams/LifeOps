@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ApiError, createEntity, getPage, getSchemas, listEntities, search, updateEntity } from "./api";
+import { ApiError, createEntity, getPage, getSchemas, getSystemInfo, listEntities, search, updateEntity } from "./api";
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn().mockResolvedValue({
@@ -45,6 +45,18 @@ describe("api", () => {
     const res = await getSchemas();
     expect(res.types["노트"].name).toBe("노트");
     expect(res.categories[0].name).toBe("메모");
+  });
+
+  it("getSystemInfo는 GET /api/system/info를 호출한다", async () => {
+    const f = mockFetch(200, { data_dir: "/tmp/lifeops", port: 3000, lan_addrs: [] });
+    vi.stubGlobal("fetch", f);
+
+    await expect(getSystemInfo()).resolves.toEqual({
+      data_dir: "/tmp/lifeops",
+      port: 3000,
+      lan_addrs: [],
+    });
+    expect(f).toHaveBeenCalledWith("/api/system/info", expect.objectContaining({ method: "GET" }));
   });
 
   it("getPage가 chart 계열을 파싱한다", async () => {
