@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LifeOps",
   "version": "0.1.0",
-  "identifier": "com.lifeops.app",
+  "identifier": "com.lifeops.desktop",
   "build": { "frontendDist": "ui" },
   "app": {
     "withGlobalTauri": true,
