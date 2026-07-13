@@ -1,0 +1,6 @@
+type: 물건
+category: 컬렉션
+fields:
+  이름: { kind: text, required: true }
+  상태: { kind: enum, options: [위시, 주문됨, 보유, 과거] }
+  가격: { kind: money }

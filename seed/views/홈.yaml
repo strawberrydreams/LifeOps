@@ -1,0 +1,6 @@
+page: 홈
+blocks:
+  - view: 할 일
+    source: 할일
+    layout: checklist
+    columns: [내용, 마감일]

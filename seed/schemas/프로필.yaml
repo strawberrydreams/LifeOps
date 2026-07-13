@@ -1,0 +1,6 @@
+type: 프로필
+category: 나
+singleton: true
+fields:
+  이름: { kind: text }
+  거주지: { kind: text }

@@ -1,0 +1,9 @@
+type: 할일
+category: 할일
+behaviors:
+  recurrence: { flag: 완료, rule: 반복, date: 마감일 }
+fields:
+  내용: { kind: text, required: true }
+  완료: { kind: bool }
+  마감일: { kind: date }
+  반복: { kind: text }
