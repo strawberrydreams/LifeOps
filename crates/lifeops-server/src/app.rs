@@ -4,6 +4,9 @@ use crate::static_files::static_handler;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
+use tower_http::limit::RequestBodyLimitLayer;
+
+const MCP_REQUEST_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 pub fn build_app(state: AppState) -> Router {
     build_app_with_mcp_auth(state, crate::mcp::auth::AuthPolicy::from_env())
@@ -50,6 +53,7 @@ pub(crate) fn build_app_with_mcp_auth(
 
     let mcp = Router::new()
         .nest_service("/mcp", crate::mcp::service(state.clone()))
+        .layer(RequestBodyLimitLayer::new(MCP_REQUEST_BODY_LIMIT))
         .layer(from_fn_with_state(auth_policy, crate::mcp::guard));
 
     Router::new()
@@ -65,7 +69,7 @@ mod tests {
     use crate::state::test_state;
     use axum::body::{to_bytes, Body};
     use axum::extract::ConnectInfo;
-    use axum::http::{Request, StatusCode};
+    use axum::http::{header::CONTENT_LENGTH, header::ORIGIN, HeaderValue, Request, StatusCode};
     use std::net::SocketAddr;
     use tower::ServiceExt;
 
@@ -111,6 +115,13 @@ mod tests {
         request
             .extensions_mut()
             .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        request
+    }
+
+    fn with_origin(mut request: Request<Body>, origin: &str) -> Request<Body> {
+        request
+            .headers_mut()
+            .insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
         request
     }
 
@@ -210,5 +221,63 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mcp_적대적_origin은_올바른_host와_토큰에도_403이다() {
+        let (mut state, _dir) = test_state().await;
+        state.bound_addr = "127.0.0.1:3000".parse().unwrap();
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+        let request = with_origin(
+            mcp_initialize_request("127.0.0.1:5555", "127.0.0.1:3000", Some("s3cr3t")),
+            "https://evil.example",
+        );
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mcp_같은_origin은_initialize에_도달한다() {
+        let (mut state, _dir) = test_state().await;
+        state.bound_addr = "127.0.0.1:3000".parse().unwrap();
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+        let request = with_origin(
+            mcp_initialize_request("127.0.0.1:5555", "127.0.0.1:3000", Some("s3cr3t")),
+            "http://127.0.0.1:3000",
+        );
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("mcp-session-id"));
+    }
+
+    #[tokio::test]
+    async fn mcp_content_length가_본문제한을_넘으면_413이다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+        let mut request =
+            mcp_initialize_request("127.0.0.1:5555", "127.0.0.1:3000", Some("s3cr3t"));
+        let oversized = MCP_REQUEST_BODY_LIMIT + 1;
+        request.headers_mut().insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&oversized.to_string()).unwrap(),
+        );
+        *request.body_mut() = Body::from(vec![b'x'; oversized]);
+
+        let response = app.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

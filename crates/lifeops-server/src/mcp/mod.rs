@@ -71,13 +71,30 @@ pub fn service(state: AppState) -> StreamableHttpService<LifeOpsMcp, LocalSessio
             .into_iter()
             .map(|(_, ip)| ip),
     );
-    let config = StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts);
+    let allowed_origins = allowed_origins(&allowed_hosts, state.bound_addr.port());
+    let config = StreamableHttpServerConfig::default()
+        .with_allowed_hosts(allowed_hosts)
+        .with_allowed_origins(allowed_origins);
 
     StreamableHttpService::new(
         move || Ok(LifeOpsMcp::new(state.clone())),
         Arc::new(LocalSessionManager::default()),
         config,
     )
+}
+
+fn allowed_origins(hosts: &[String], port: u16) -> Vec<String> {
+    hosts
+        .iter()
+        .map(|host| {
+            let authority = if host.parse::<std::net::Ipv6Addr>().is_ok() {
+                format!("[{host}]")
+            } else {
+                host.clone()
+            };
+            format!("http://{authority}:{port}")
+        })
+        .collect()
 }
 
 fn allowed_hosts(bound_ip: IpAddr, interface_ips: impl IntoIterator<Item = IpAddr>) -> Vec<String> {
@@ -194,5 +211,21 @@ mod tests {
         }
         assert!(!hosts.contains(&"0.0.0.0".to_string()));
         assert!(!hosts.contains(&"evil.example".to_string()));
+    }
+
+    #[test]
+    fn origin_허용목록은_포트와_ipv6_괄호를_정규화한다() {
+        let origins = allowed_origins(
+            &["localhost".into(), "127.0.0.1".into(), "::1".into()],
+            3000,
+        );
+        assert_eq!(
+            origins,
+            [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://[::1]:3000",
+            ]
+        );
     }
 }

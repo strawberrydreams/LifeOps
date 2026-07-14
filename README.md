@@ -81,6 +81,10 @@ claude mcp add lifeops --transport http http://127.0.0.1:<포트>/mcp \
   --header "Authorization: Bearer $LIFEOPS_MCP_TOKEN"
 ```
 
+### Claude Desktop 지원 범위
+
+[Anthropic의 원격 Custom Connector 안내](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp)에 따르면 Claude Desktop도 Anthropic 클라우드에서 원격 MCP에 접속하므로 이 로컬 전용 `localhost`/LAN 엔드포인트에 직접 연결할 수 없습니다. 로컬 Desktop 설정은 stdio 또는 Desktop Extension 경로가 필요하지만 LifeOps v14는 Streamable HTTP만 제공합니다. 따라서 v14의 직접 지원 대상은 Claude Code와 로컬 HTTP MCP 클라이언트이며, Desktop용 검증된 stdio 브리지/MCPB는 후속 작업입니다. 개인 LifeOps 데이터를 공개 터널로 노출해 우회하지 마세요.
+
 ### 인증
 
 - `LIFEOPS_MCP_TOKEN`이 없으면 `/mcp`는 `127.0.0.1` 또는 `::1`에서 온 요청만 허용하고, 그 밖의 요청은 `403 Forbidden`으로 거부합니다.
