@@ -2021,7 +2021,11 @@ mod tests {
         let paths = lifeops_server::resolve_paths(&source);
         lifeops_server::install_seed_if_empty(&paths).unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        drop(runtime.block_on(lifeops_core::entity::EntityStore::open(&paths.db_path)).unwrap());
+        drop(
+            runtime
+                .block_on(lifeops_core::entity::EntityStore::open(&paths.db_path))
+                .unwrap(),
+        );
         let snapshot = runtime
             .block_on(lifeops_server::backup::create_snapshot(
                 &paths,
