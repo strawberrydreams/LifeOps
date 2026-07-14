@@ -443,15 +443,22 @@ pub fn prune_snapshots(backup_dir: &Path, keep: usize) -> io::Result<()> {
     Ok(())
 }
 
-/// 24시간 간격으로 zip 스냅샷을 만드는 백그라운드 태스크. 실패는 로그만 남긴다.
-pub fn spawn_daily_backup(data_dir: PathBuf, backup_dir: PathBuf, keep: usize) {
+/// 현재 config.json을 다시 읽어 해당 시점의 폴더·보존 개수로 백업한다.
+pub async fn create_configured_snapshot(data_dir: &Path) -> io::Result<CreatedSnapshot> {
+    let config = crate::config::load_config(data_dir);
+    let backup_dir = config.resolved_backup_dir(data_dir);
+    let paths = crate::resolve_paths(data_dir);
+    create_snapshot_with_meta(&paths, &backup_dir, config.backup_keep).await
+}
+
+/// 24시간 간격으로 zip 스냅샷을 만드는 백그라운드 태스크. 매 tick 최신 config를 읽는다.
+pub fn spawn_daily_backup(data_dir: PathBuf) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
         loop {
             ticker.tick().await;
-            let paths = crate::resolve_paths(&data_dir);
-            match create_snapshot(&paths, &backup_dir, keep).await {
-                Ok(path) => tracing::info!("백업 생성: {}", path.display()),
+            match create_configured_snapshot(&data_dir).await {
+                Ok(created) => tracing::info!("백업 생성: {}", created.path.display()),
                 Err(error) => tracing::error!("백업 실패: {error}"),
             }
         }
@@ -717,5 +724,53 @@ mod tests {
 
         let value = load_last_success(dir.path()).unwrap();
         assert!(chrono::DateTime::parse_from_rfc3339(&value).is_ok());
+    }
+
+    #[tokio::test]
+    async fn configured_snapshot은_실행_직전의_경로와_keep을_사용() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::resolve_paths(dir.path());
+        crate::install_seed_if_empty(&paths).unwrap();
+        lifeops_core::entity::EntityStore::open(&paths.db_path)
+            .await
+            .unwrap();
+        crate::config::save_config(
+            dir.path(),
+            &crate::config::AppConfig {
+                backup_dir: Some(PathBuf::from("old-backups")),
+                backup_keep: 7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let new_backups = dir.path().join("new-backups");
+        std::fs::create_dir_all(&new_backups).unwrap();
+        std::fs::write(new_backups.join("lifeops-20260101-000000.zip"), b"old-1").unwrap();
+        std::fs::write(new_backups.join("lifeops-20260102-000000.zip"), b"old-2").unwrap();
+        crate::config::save_config(
+            dir.path(),
+            &crate::config::AppConfig {
+                backup_dir: Some(PathBuf::from("new-backups")),
+                backup_keep: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let created = create_configured_snapshot(dir.path()).await.unwrap();
+
+        assert_eq!(created.path.parent().unwrap(), new_backups);
+        assert!(!dir.path().join("old-backups").exists());
+        let snapshots: Vec<_> = std::fs::read_dir(created.path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with("lifeops-")
+                    && entry.file_name().to_string_lossy().ends_with(".zip")
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].path(), created.path);
     }
 }

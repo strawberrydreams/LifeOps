@@ -212,8 +212,7 @@ pub async fn serve(
     let listener = bind_with_fallback(app_config.bind_ip(), config.port).await?;
     let addr = listener.local_addr()?;
     let state = build_state(&config, addr).await?;
-    let backup_dir = app_config.resolved_backup_dir(&config.data_dir);
-    backup::spawn_daily_backup(config.data_dir.clone(), backup_dir, app_config.backup_keep);
+    backup::spawn_daily_backup(config.data_dir.clone());
     let app = app::build_app(state);
     let fut = async move {
         if let Err(error) = axum::serve(listener, app).await {

@@ -143,8 +143,8 @@ pub fn run() {
                     }
                 }
                 if let Ok((addr, future)) = result {
-                    if let Err(error) = addr_i.set_text(tray_address_label(addr.port())) {
-                        tracing::error!(%error, "트레이 LAN 주소 갱신 실패");
+                    if let Err(error) = addr_i.set_text(tray_address_label(addr)) {
+                        tracing::error!(%error, "트레이 접속 범위 갱신 실패");
                     }
                     future.await;
                 }
@@ -1622,16 +1622,24 @@ fn show_main_window(app: &AppHandle<Wry>) {
     }
 }
 
-fn tray_address_label(port: u16) -> String {
-    tray_address_label_from(port, lifeops_server::routes::system::lan_addresses(port))
+fn tray_address_label(addr: std::net::SocketAddr) -> String {
+    let addresses = if addr.ip().is_loopback() {
+        Vec::new()
+    } else {
+        lifeops_server::routes::system::lan_addresses(addr.port())
+    };
+    tray_address_label_from(addr, addresses)
 }
 
-fn tray_address_label_from(port: u16, addresses: Vec<String>) -> String {
+fn tray_address_label_from(addr: std::net::SocketAddr, addresses: Vec<String>) -> String {
+    if addr.ip().is_loopback() {
+        return format!("접속 범위: 내 기기에서만 · 포트 {}", addr.port());
+    }
     addresses
         .into_iter()
         .next()
         .map(|url| format!("LAN 주소: {url}"))
-        .unwrap_or_else(|| format!("LAN 주소: 포트 {port} · 설정에서 확인"))
+        .unwrap_or_else(|| format!("LAN 주소: 포트 {} · 설정에서 확인", addr.port()))
 }
 
 fn initialize_default_autostart(app: &AppHandle<Wry>, data_dir: &Path) {
@@ -2201,13 +2209,31 @@ mod tests {
     }
 
     #[test]
-    fn tray_lan_label은_실제_주소를_우선하고_없으면_정확한_port를_안내한다() {
+    fn tray_label은_loopback이면_내기기전용을_표시한다() {
         assert_eq!(
-            tray_address_label_from(3012, vec!["http://192.168.0.7:3012".into()]),
+            tray_address_label_from(
+                "127.0.0.1:3012".parse().unwrap(),
+                vec!["http://192.168.0.7:3012".into()]
+            ),
+            "접속 범위: 내 기기에서만 · 포트 3012"
+        );
+        assert_eq!(
+            tray_address_label_from("[::1]:3013".parse().unwrap(), vec![]),
+            "접속 범위: 내 기기에서만 · 포트 3013"
+        );
+    }
+
+    #[test]
+    fn tray_label은_lan이면_실제_주소를_우선하고_없으면_port를_안내한다() {
+        assert_eq!(
+            tray_address_label_from(
+                "0.0.0.0:3012".parse().unwrap(),
+                vec!["http://192.168.0.7:3012".into()]
+            ),
             "LAN 주소: http://192.168.0.7:3012"
         );
         assert_eq!(
-            tray_address_label_from(3012, vec![]),
+            tray_address_label_from("0.0.0.0:3012".parse().unwrap(), vec![]),
             "LAN 주소: 포트 3012 · 설정에서 확인"
         );
     }
