@@ -2,6 +2,7 @@ use lifeops_server::{default_data_dir, resolve_paths, serve, RunConfig};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +19,9 @@ const IMPORT_MANIFEST: &str = ".apply-manifest.json";
 const IMPORT_BACKUPS_DIR: &str = ".import-backups";
 const IMPORT_STAGING_PREFIX: &str = ".import-staging-";
 const IMPORT_NAMES: [&str; 4] = ["schemas", "views", "data", "categories.yaml"];
+const MAX_SNAPSHOT_ENTRIES: usize = 4_096;
+const MAX_SNAPSHOT_UNCOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_SNAPSHOT_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static NEXT_IMPORT_ID: AtomicU64 = AtomicU64::new(0);
 static IMPORT_IN_PROGRESS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -67,7 +71,9 @@ pub fn run() {
             get_autostart,
             set_autostart,
             open_data_dir,
-            import_from_dir
+            import_from_dir,
+            restore_snapshot,
+            relaunch_app
         ])
         .setup(move |app| {
             let open_i = MenuItem::with_id(app, "open", "열기", true, None::<&str>)?;
@@ -197,6 +203,292 @@ fn open_data_dir_at(dir: &Path) -> Result<(), String> {
 async fn import_from_dir(dir: String) -> Result<(), String> {
     let _guard = ImportGuard::acquire()?;
     stage_import(Path::new(&dir), &default_data_dir()).await
+}
+
+/// 백업 목록의 파일명으로 snapshot을 검증·추출한 뒤 기존 import 경로에 staging한다.
+#[tauri::command]
+async fn restore_snapshot(name: String) -> Result<(), String> {
+    let name_path = Path::new(&name);
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name_path.components().count() != 1
+        || name_path
+            .file_name()
+            .is_none_or(|file_name| file_name != name.as_str())
+        || !name.starts_with("lifeops-")
+        || !name.ends_with(".zip")
+    {
+        return Err("잘못된 백업 이름입니다".into());
+    }
+
+    let _guard = ImportGuard::acquire()?;
+    let data_dir = default_data_dir();
+    ensure_no_pending_import(&data_dir)?;
+    let config = lifeops_server::config::load_config(&data_dir);
+    let backup_dir = config.resolved_backup_dir(&data_dir);
+    let zip_path = backup_dir.join(&name);
+    let metadata = std::fs::symlink_metadata(&zip_path)
+        .map_err(|error| format!("백업 파일 확인 실패: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("백업은 symlink가 아닌 일반 zip 파일이어야 합니다".into());
+    }
+
+    let staging_root = std::env::temp_dir().join(format!("lifeops-restore-{}", import_id()));
+    std::fs::create_dir(&staging_root)
+        .map_err(|error| format!("복원 임시 폴더 생성 실패: {error}"))?;
+    let result = async {
+        unpack_snapshot(&zip_path, &staging_root)?;
+        stage_import(&staging_root, &data_dir).await
+    }
+    .await;
+    if let Err(error) = std::fs::remove_dir_all(&staging_root) {
+        tracing::warn!(path = %staging_root.display(), %error, "복원 임시 폴더 정리 실패");
+    }
+    result
+}
+
+fn ensure_no_pending_import(data_dir: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(data_dir.join(PENDING_IMPORT_DIR)) {
+        Ok(_) => Err("이미 적용 대기 중인 가져오기가 있습니다".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("적용 대기 중인 가져오기 확인 실패: {error}")),
+    }
+}
+
+/// zip을 `dest` 하위로 푼다. 쓰기 전에 전체 엔트리의 경로·타입·필수 layout을 검증한다.
+fn unpack_snapshot(zip_path: &Path, dest: &Path) -> Result<(), String> {
+    let mut archive = open_snapshot_archive(zip_path)?;
+    let mut entries = HashMap::<PathBuf, bool>::new();
+    let mut declared_total = 0_u64;
+    let entry_count = archive.len();
+
+    validate_snapshot_budget(entry_count, declared_total)?;
+
+    for index in 0..entry_count {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| format!("zip 엔트리 읽기 실패: {error}"))?;
+        let relative = entry
+            .enclosed_name()
+            .ok_or_else(|| "안전하지 않은 zip 경로".to_string())?
+            .to_path_buf();
+        validate_snapshot_entry(&entry, &relative)?;
+        validate_snapshot_entry_budget(entry.size())?;
+        let is_dir = entry.is_dir();
+        if entries.insert(relative.clone(), is_dir).is_some() {
+            return Err(format!("중복 zip 엔트리: {}", relative.display()));
+        }
+        declared_total = declared_total
+            .checked_add(entry.size())
+            .ok_or_else(|| "snapshot 비압축 크기가 표현 범위를 넘습니다".to_string())?;
+        validate_snapshot_budget(entry_count, declared_total)?;
+    }
+
+    validate_required_snapshot_layout(&entries)?;
+    validate_snapshot_entry_conflicts(&entries)?;
+
+    let destination_metadata = std::fs::symlink_metadata(dest)
+        .map_err(|error| format!("복원 대상 폴더 확인 실패: {error}"))?;
+    if destination_metadata.file_type().is_symlink() || !destination_metadata.is_dir() {
+        return Err("복원 대상은 symlink가 아닌 디렉터리여야 합니다".into());
+    }
+
+    let mut extracted_total = 0_u64;
+    for index in 0..entry_count {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("zip 엔트리 읽기 실패: {error}"))?;
+        let relative = entry
+            .enclosed_name()
+            .ok_or_else(|| "안전하지 않은 zip 경로".to_string())?;
+        let output = dest.join(&relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output)
+                .map_err(|error| format!("복원 디렉터리 생성 실패: {error}"))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("복원 디렉터리 생성 실패: {error}"))?;
+        }
+        let mut writer = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output)
+            .map_err(|error| format!("복원 파일 생성 실패: {error}"))?;
+        let declared_size = entry.size();
+        let remaining = MAX_SNAPSHOT_UNCOMPRESSED_BYTES
+            .checked_sub(extracted_total)
+            .ok_or_else(|| "snapshot 비압축 크기 제한을 초과했습니다".to_string())?;
+        let entry_remaining = remaining.min(MAX_SNAPSHOT_ENTRY_BYTES);
+        let mut limited = std::io::Read::take(&mut entry, entry_remaining.saturating_add(1));
+        let copied = std::io::copy(&mut limited, &mut writer)
+            .map_err(|error| format!("복원 파일 기록 실패: {error}"))?;
+        if copied > MAX_SNAPSHOT_ENTRY_BYTES {
+            return Err(format!(
+                "snapshot 개별 엔트리 크기 제한({MAX_SNAPSHOT_ENTRY_BYTES} bytes)을 초과했습니다"
+            ));
+        }
+        if copied > remaining {
+            return Err(format!(
+                "snapshot 비압축 크기 제한({MAX_SNAPSHOT_UNCOMPRESSED_BYTES} bytes)을 초과했습니다"
+            ));
+        }
+        if copied != declared_size {
+            return Err(format!(
+                "zip 엔트리 선언 크기 불일치({}): declared={declared_size}, actual={copied}",
+                relative.display()
+            ));
+        }
+        extracted_total = extracted_total
+            .checked_add(copied)
+            .ok_or_else(|| "snapshot 비압축 크기가 표현 범위를 넘습니다".to_string())?;
+        writer
+            .sync_all()
+            .map_err(|error| format!("복원 파일 동기화 실패: {error}"))?;
+    }
+    sync_directory(dest)?;
+    Ok(())
+}
+
+fn validate_snapshot_budget(entry_count: usize, uncompressed_bytes: u64) -> Result<(), String> {
+    if entry_count > MAX_SNAPSHOT_ENTRIES {
+        return Err(format!(
+            "snapshot 엔트리 수 제한({MAX_SNAPSHOT_ENTRIES})을 초과했습니다"
+        ));
+    }
+    if uncompressed_bytes > MAX_SNAPSHOT_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "snapshot 비압축 크기 제한({MAX_SNAPSHOT_UNCOMPRESSED_BYTES} bytes)을 초과했습니다"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_entry_budget(uncompressed: u64) -> Result<(), String> {
+    if uncompressed > MAX_SNAPSHOT_ENTRY_BYTES {
+        return Err(format!(
+            "snapshot 개별 엔트리 크기 제한({MAX_SNAPSHOT_ENTRY_BYTES} bytes)을 초과했습니다"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_required_snapshot_layout(entries: &HashMap<PathBuf, bool>) -> Result<(), String> {
+    for (path, expected_dir) in [
+        ("data", true),
+        ("data/lifeops.db", false),
+        ("schemas", true),
+        ("views", true),
+        ("categories.yaml", false),
+    ] {
+        if entries.get(Path::new(path)) != Some(&expected_dir) {
+            let expected = if expected_dir {
+                "디렉터리"
+            } else {
+                "파일"
+            };
+            return Err(format!(
+                "백업 zip 필수 항목 누락/타입 오류: {path} ({expected})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn open_snapshot_archive(zip_path: &Path) -> Result<zip::ZipArchive<std::fs::File>, String> {
+    #[cfg(unix)]
+    let file = {
+        let fd = rustix::fs::open(
+            zip_path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|error| format!("백업 zip no-follow 열기 실패: {error}"))?;
+        let stat =
+            rustix::fs::fstat(&fd).map_err(|error| format!("백업 zip 정보 확인 실패: {error}"))?;
+        if !rustix::fs::FileType::from_raw_mode(stat.st_mode).is_file() {
+            return Err("백업 zip이 일반 파일이 아닙니다".into());
+        }
+        std::fs::File::from(fd)
+    };
+    #[cfg(not(unix))]
+    let file =
+        std::fs::File::open(zip_path).map_err(|error| format!("백업 zip 열기 실패: {error}"))?;
+
+    zip::ZipArchive::new(file).map_err(|error| format!("백업 zip 파싱 실패: {error}"))
+}
+
+fn validate_snapshot_entry(entry: &zip::read::ZipFile<'_>, relative: &Path) -> Result<(), String> {
+    let top_level = relative
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| "비어 있거나 안전하지 않은 zip 경로".to_string())?;
+    if !IMPORT_NAMES.contains(&top_level) {
+        return Err(format!(
+            "허용되지 않은 snapshot 항목: {}",
+            relative.display()
+        ));
+    }
+    if top_level == "data"
+        && relative != Path::new("data")
+        && relative != Path::new("data/lifeops.db")
+    {
+        return Err(format!(
+            "허용되지 않은 snapshot data 항목: {}",
+            relative.display()
+        ));
+    }
+
+    if let Some(mode) = entry.unix_mode() {
+        let kind = mode & 0o170000;
+        let expected = if entry.is_dir() { 0o040000 } else { 0o100000 };
+        if kind != 0 && kind != expected {
+            return Err(format!(
+                "symlink 또는 특수 zip 엔트리 거부: {}",
+                relative.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_snapshot_entry_conflicts(entries: &HashMap<PathBuf, bool>) -> Result<(), String> {
+    for (path, is_dir) in entries {
+        let mut parent = path.parent();
+        while let Some(ancestor) = parent {
+            if entries
+                .get(ancestor)
+                .is_some_and(|ancestor_is_dir| !ancestor_is_dir)
+            {
+                return Err(format!("zip 파일/디렉터리 경로 충돌: {}", path.display()));
+            }
+            parent = ancestor.parent();
+        }
+        if !is_dir
+            && entries
+                .keys()
+                .any(|candidate| candidate != path && candidate.starts_with(path))
+        {
+            return Err(format!("zip 파일/디렉터리 경로 충돌: {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+/// 바인드 변경·복원 staging 후 앱을 재시작해 적용한다.
+#[tauri::command]
+fn relaunch_app(app: AppHandle) {
+    app.restart();
 }
 
 struct ImportGuard;
@@ -1464,6 +1756,395 @@ mod tests {
     use super::*;
     use percent_encoding::percent_decode_str;
     use std::cell::Cell;
+    use std::io::Write;
+
+    fn make_snapshot_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, contents) in entries {
+            if name.ends_with('/') {
+                archive
+                    .add_directory(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+            } else {
+                archive
+                    .start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                archive.write_all(contents).unwrap();
+            }
+        }
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn unpack_snapshot은_import_layout을_그대로_푼다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join("snapshot.zip");
+        make_snapshot_zip(
+            &snapshot,
+            &[
+                ("data/", b""),
+                ("data/lifeops.db", b"DB"),
+                ("schemas/", b""),
+                ("schemas/item.yaml", b"type: item"),
+                ("views/", b""),
+                ("views/home.yaml", b"page: home"),
+                ("categories.yaml", b"categories: []"),
+            ],
+        );
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+
+        unpack_snapshot(&snapshot, &output).unwrap();
+
+        assert_eq!(
+            std::fs::read(output.join("data/lifeops.db")).unwrap(),
+            b"DB"
+        );
+        assert_eq!(
+            std::fs::read(output.join("schemas/item.yaml")).unwrap(),
+            b"type: item"
+        );
+        assert!(output.join("views/home.yaml").is_file());
+        assert!(output.join("categories.yaml").is_file());
+    }
+
+    #[test]
+    fn unpack_snapshot은_zip_slip과_허용되지_않은_layout을_쓰기전에_거부한다() {
+        for entry in ["../escape.txt", "/absolute.txt", "config.json"] {
+            let root = tempfile::tempdir().unwrap();
+            let snapshot = root.path().join("snapshot.zip");
+            make_snapshot_zip(
+                &snapshot,
+                &[
+                    ("data/", b""),
+                    ("data/lifeops.db", b"DB"),
+                    ("schemas/", b""),
+                    ("views/", b""),
+                    ("categories.yaml", b"categories: []"),
+                    (entry, b"unsafe"),
+                ],
+            );
+            let output = root.path().join("output");
+            std::fs::create_dir(&output).unwrap();
+
+            assert!(unpack_snapshot(&snapshot, &output).is_err());
+            assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+            assert!(!root.path().join("escape.txt").exists());
+        }
+    }
+
+    #[test]
+    fn unpack_snapshot은_symlink_entry를_쓰기전에_거부한다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join("snapshot.zip");
+        let file = std::fs::File::create(&snapshot).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .add_directory("data/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .start_file("data/lifeops.db", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"DB").unwrap();
+        archive
+            .add_directory("schemas/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .add_directory("views/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .start_file("categories.yaml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"categories: []").unwrap();
+        archive
+            .add_symlink(
+                "schemas/escape",
+                "../../outside",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+
+        let error = unpack_snapshot(&snapshot, &output).unwrap_err();
+
+        assert!(error.contains("symlink") || error.contains("특수"));
+        assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn unpack_snapshot은_필수_database와_충돌없는_layout을_요구한다() {
+        let root = tempfile::tempdir().unwrap();
+        let missing_db = root.path().join("missing-db.zip");
+        make_snapshot_zip(
+            &missing_db,
+            &[
+                ("data/", b""),
+                ("schemas/", b""),
+                ("schemas/item.yaml", b"type: item"),
+                ("views/", b""),
+                ("categories.yaml", b"categories: []"),
+            ],
+        );
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+        assert!(unpack_snapshot(&missing_db, &output)
+            .unwrap_err()
+            .contains("data/lifeops.db"));
+
+        let conflict = root.path().join("conflict.zip");
+        make_snapshot_zip(
+            &conflict,
+            &[
+                ("data/", b""),
+                ("data/lifeops.db", b"DB"),
+                ("schemas/", b""),
+                ("schemas/item", b"item"),
+                ("schemas/item/child", b"child"),
+                ("views/", b""),
+                ("categories.yaml", b"categories: []"),
+            ],
+        );
+        assert!(unpack_snapshot(&conflict, &output)
+            .unwrap_err()
+            .contains("충돌"));
+        assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn unpack_snapshot은_partial_snapshot을_쓰기전에_거부한다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join("partial.zip");
+        make_snapshot_zip(
+            &snapshot,
+            &[
+                ("data/", b""),
+                ("data/lifeops.db", b"DB"),
+                ("schemas/", b""),
+                ("categories.yaml", b"categories: []"),
+            ],
+        );
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+
+        let error = unpack_snapshot(&snapshot, &output).unwrap_err();
+
+        assert!(error.contains("views"));
+        assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn unpack_snapshot은_database외_data항목을_쓰기전에_거부한다() {
+        for extra in ["data/extra", "data/nested/extra"] {
+            let root = tempfile::tempdir().unwrap();
+            let snapshot = root.path().join("extra-data.zip");
+            make_snapshot_zip(
+                &snapshot,
+                &[
+                    ("data/", b""),
+                    ("data/lifeops.db", b"DB"),
+                    ("schemas/", b""),
+                    ("views/", b""),
+                    ("categories.yaml", b"categories: []"),
+                    (extra, b"unexpected"),
+                ],
+            );
+            let output = root.path().join("output");
+            std::fs::create_dir(&output).unwrap();
+
+            let error = unpack_snapshot(&snapshot, &output).unwrap_err();
+
+            assert!(error.contains("data 항목"));
+            assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+        }
+    }
+
+    #[test]
+    fn unpack_snapshot_output은_기존_stage_import_layout과_호환된다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot_source = root.path().join("snapshot-source");
+        let destination = root.path().join("destination");
+        write_test_config(&snapshot_source);
+        write_test_config(&destination);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        drop(runtime.block_on(open_test_lifeops_db(&snapshot_source)));
+
+        let database = std::fs::read(snapshot_source.join("data/lifeops.db")).unwrap();
+        let categories = std::fs::read(snapshot_source.join("categories.yaml")).unwrap();
+        let snapshot = root.path().join("snapshot.zip");
+        make_snapshot_zip(
+            &snapshot,
+            &[
+                ("data/", b""),
+                ("data/lifeops.db", &database),
+                ("schemas/", b""),
+                ("views/", b""),
+                ("categories.yaml", &categories),
+            ],
+        );
+        let extracted = root.path().join("extracted");
+        std::fs::create_dir(&extracted).unwrap();
+
+        unpack_snapshot(&snapshot, &extracted).unwrap();
+        runtime
+            .block_on(stage_import(&extracted, &destination))
+            .unwrap();
+
+        assert!(destination
+            .join(PENDING_IMPORT_DIR)
+            .join(IMPORT_READY_MARKER)
+            .is_file());
+        assert!(destination
+            .join(PENDING_IMPORT_DIR)
+            .join("data/lifeops.db")
+            .is_file());
+        assert!(
+            std::fs::read_dir(destination.join(PENDING_IMPORT_DIR).join("schemas"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        assert!(
+            std::fs::read_dir(destination.join(PENDING_IMPORT_DIR).join("views"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn server가_생성한_snapshot은_unpack_contract와_호환된다() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let paths = lifeops_server::resolve_paths(&source);
+        lifeops_server::install_seed_if_empty(&paths).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        drop(runtime.block_on(lifeops_core::entity::EntityStore::open(&paths.db_path)).unwrap());
+        let snapshot = runtime
+            .block_on(lifeops_server::backup::create_snapshot(
+                &paths,
+                &paths.backups_dir,
+                7,
+            ))
+            .unwrap();
+        let extracted = root.path().join("extracted");
+        std::fs::create_dir(&extracted).unwrap();
+
+        unpack_snapshot(&snapshot, &extracted).unwrap();
+
+        assert!(extracted.join("data/lifeops.db").is_file());
+        assert!(extracted.join("schemas").is_dir());
+        assert!(extracted.join("views").is_dir());
+        assert!(extracted.join("categories.yaml").is_file());
+    }
+
+    #[test]
+    fn snapshot_budget은_엔트리수와_총비압축크기를_제한한다() {
+        assert!(
+            validate_snapshot_budget(MAX_SNAPSHOT_ENTRIES, MAX_SNAPSHOT_UNCOMPRESSED_BYTES).is_ok()
+        );
+        assert!(validate_snapshot_budget(MAX_SNAPSHOT_ENTRIES + 1, 0)
+            .unwrap_err()
+            .contains("엔트리 수"));
+        assert!(
+            validate_snapshot_budget(1, MAX_SNAPSHOT_UNCOMPRESSED_BYTES + 1)
+                .unwrap_err()
+                .contains("비압축 크기")
+        );
+        assert!(validate_snapshot_entry_budget(MAX_SNAPSHOT_ENTRY_BYTES + 1)
+            .unwrap_err()
+            .contains("개별 엔트리"));
+    }
+
+    #[test]
+    fn unpack_snapshot은_cap이내_server_style_고압축_snapshot을_허용한다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join("compressed-bomb.zip");
+        let file = std::fs::File::create(&snapshot).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive
+            .add_directory("data/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.start_file("data/lifeops.db", options).unwrap();
+        archive.write_all(&vec![0; 1024 * 1024]).unwrap();
+        archive
+            .add_directory("schemas/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .add_directory("views/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .start_file("categories.yaml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"categories: []").unwrap();
+        archive.finish().unwrap();
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+
+        unpack_snapshot(&snapshot, &output).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(output.join("data/lifeops.db"))
+                .unwrap()
+                .len(),
+            1024 * 1024
+        );
+    }
+
+    #[test]
+    fn unpack_snapshot은_다수_엔트리_bomb을_거부한다() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join("many-entries.zip");
+        let file = std::fs::File::create(&snapshot).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .add_directory("data/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .start_file("data/lifeops.db", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"DB").unwrap();
+        archive
+            .add_directory("schemas/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .add_directory("views/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .start_file("categories.yaml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"categories: []").unwrap();
+        for index in 0..=(MAX_SNAPSHOT_ENTRIES - 4) {
+            archive
+                .start_file(
+                    format!("schemas/{index}.yaml"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+        }
+        archive.finish().unwrap();
+        let output = root.path().join("output");
+        std::fs::create_dir(&output).unwrap();
+
+        let error = unpack_snapshot(&snapshot, &output).unwrap_err();
+
+        assert!(error.contains("엔트리 수"));
+        assert!(std::fs::read_dir(&output).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn restore는_pending_import를_추출전에_lstat로_거부한다() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(PENDING_IMPORT_DIR)).unwrap();
+
+        assert!(ensure_no_pending_import(root.path())
+            .unwrap_err()
+            .contains("적용 대기"));
+    }
 
     fn write_test_config(root: &Path) {
         std::fs::create_dir_all(root.join("schemas")).unwrap();
