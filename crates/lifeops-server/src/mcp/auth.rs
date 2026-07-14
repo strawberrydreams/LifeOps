@@ -11,7 +11,7 @@ pub enum AuthDecision {
 ///
 /// 요청마다 환경 변수를 다시 읽지 않아 실행 중 정책이 흔들리지 않으며,
 /// 테스트에서는 프로세스 전역 환경을 변경하지 않고 정책을 주입할 수 있다.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthPolicy {
     token: Option<String>,
 }
@@ -23,7 +23,9 @@ impl AuthPolicy {
 
     pub(crate) fn from_token(token: Option<String>) -> Self {
         Self {
-            token: token.filter(|value| !value.is_empty()),
+            token: token
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         }
     }
 
@@ -99,5 +101,14 @@ mod tests {
         let policy = AuthPolicy::from_token(Some(String::new()));
         assert_eq!(policy.decide(None, true), AuthDecision::Allow);
         assert_eq!(policy.decide(None, false), AuthDecision::Forbidden);
+
+        let whitespace = AuthPolicy::from_token(Some("   ".to_string()));
+        assert_eq!(whitespace.decide(None, true), AuthDecision::Allow);
+    }
+
+    #[test]
+    fn 토큰_앞뒤_공백은_제거한다() {
+        let policy = AuthPolicy::from_token(Some("  s3cr3t  ".to_string()));
+        assert_eq!(policy.decide(Some("s3cr3t"), false), AuthDecision::Allow);
     }
 }

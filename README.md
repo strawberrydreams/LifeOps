@@ -88,8 +88,11 @@ claude mcp add lifeops --transport http http://127.0.0.1:<포트>/mcp \
 - LAN에서 MCP를 사용하려면 충분히 길고 무작위인 토큰을 설정한 상태로 서버를 시작하세요.
 
 ```sh
-LIFEOPS_MCP_TOKEN="충분히-길고-무작위인-토큰" cargo run -p lifeops-server
+export LIFEOPS_MCP_TOKEN="충분히-길고-무작위인-토큰"
+cargo run -p lifeops-server
 ```
+
+같은 셸에서 위 환경변수를 유지한 채 Claude Code 등록 명령도 실행하세요. 서버 시작 후 VPN·네트워크 인터페이스나 IP가 바뀌면 안전한 Host 허용 목록을 갱신하도록 LifeOps를 재시작하고, LAN에서는 호스트명 대신 표시된 IP 주소로 연결하세요.
 
 이 토큰은 `/mcp`만 보호합니다. 웹 UI와 REST API의 LAN 접속에는 별도 인증이 없으므로 기존 안내대로 신뢰하는 네트워크나 개인 VPN에서만 LAN 접속을 사용하세요.
 
