@@ -216,7 +216,12 @@ pub async fn serve(
     backup::spawn_daily_backup(config.data_dir.clone());
     let app = app::build_app(state);
     let fut = async move {
-        if let Err(error) = axum::serve(listener, app).await {
+        if let Err(error) = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        {
             tracing::error!("서버 실행 실패: {error}");
         }
     };

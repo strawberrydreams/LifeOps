@@ -1,10 +1,18 @@
 use crate::routes::{entities, misc, pages, schemas, search, system};
 use crate::state::AppState;
 use crate::static_files::static_handler;
+use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 
 pub fn build_app(state: AppState) -> Router {
+    build_app_with_mcp_auth(state, crate::mcp::auth::AuthPolicy::from_env())
+}
+
+pub(crate) fn build_app_with_mcp_auth(
+    state: AppState,
+    auth_policy: crate::mcp::auth::AuthPolicy,
+) -> Router {
     let api = Router::new()
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/entities", get(entities::list).post(entities::create))
@@ -40,8 +48,13 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/system/backups", get(system::backups_list))
         .route("/api/reload", post(misc::reload));
 
+    let mcp = Router::new()
+        .nest_service("/mcp", crate::mcp::service(state.clone()))
+        .layer(from_fn_with_state(auth_policy, crate::mcp::guard));
+
     Router::new()
         .merge(api)
+        .merge(mcp)
         .fallback(static_handler)
         .with_state(state)
 }
@@ -51,7 +64,9 @@ mod tests {
     use super::*;
     use crate::state::test_state;
     use axum::body::{to_bytes, Body};
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
+    use std::net::SocketAddr;
     use tower::ServiceExt;
 
     #[tokio::test]
@@ -70,5 +85,130 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), 1 << 20).await.unwrap();
         assert_eq!(&body[..], b"ok");
+    }
+
+    fn mcp_initialize_request(peer: &str, host: &str, bearer: Option<&str>) -> Request<Body> {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "lifeops-test", "version": "1.0" }
+            }
+        });
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", host)
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(token) = bearer {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        let mut request = builder.body(Body::from(body.to_string())).unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
+        request
+    }
+
+    #[tokio::test]
+    async fn mcp_토큰없음_loopback의_유효한_initialize는_200이다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app_with_mcp_auth(state, crate::mcp::auth::AuthPolicy::from_token(None));
+
+        let response = app
+            .oneshot(mcp_initialize_request(
+                "127.0.0.1:5555",
+                "127.0.0.1:3000",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("mcp-session-id"));
+    }
+
+    #[tokio::test]
+    async fn mcp_토큰없음_비loopback은_403이다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app_with_mcp_auth(state, crate::mcp::auth::AuthPolicy::from_token(None));
+
+        let response = app
+            .oneshot(mcp_initialize_request(
+                "192.168.10.9:5555",
+                "192.168.10.9:3000",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mcp_토큰_불일치는_loopback에서도_401이다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+
+        let response = app
+            .oneshot(mcp_initialize_request(
+                "127.0.0.1:5555",
+                "127.0.0.1:3000",
+                Some("wrong"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()["www-authenticate"], "Bearer");
+    }
+
+    #[tokio::test]
+    async fn mcp_토큰_일치_및_허용된_lan_host는_initialize에_도달한다() {
+        let (mut state, _dir) = test_state().await;
+        state.bound_addr = "192.168.10.4:3000".parse().unwrap();
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+
+        let response = app
+            .oneshot(mcp_initialize_request(
+                "192.168.10.9:5555",
+                "192.168.10.4:3000",
+                Some("s3cr3t"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key("mcp-session-id"));
+    }
+
+    #[tokio::test]
+    async fn mcp_적대적_host는_올바른_토큰에도_403이다() {
+        let (state, _dir) = test_state().await;
+        let app = build_app_with_mcp_auth(
+            state,
+            crate::mcp::auth::AuthPolicy::from_token(Some("s3cr3t".into())),
+        );
+
+        let response = app
+            .oneshot(mcp_initialize_request(
+                "127.0.0.1:5555",
+                "evil.example:3000",
+                Some("s3cr3t"),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
