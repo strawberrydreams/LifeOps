@@ -2,6 +2,7 @@ pub mod app;
 pub mod backup;
 pub mod config;
 pub mod error;
+pub mod mcp;
 pub mod routes;
 pub mod state;
 pub mod static_files;

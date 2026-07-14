@@ -28,6 +28,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 zip = "2"
+rmcp = { version = "2.2.0", features = ["server", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
+schemars = "1.2.1"
 
 [dev-dependencies]
 tempfile = "3"
